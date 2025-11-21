@@ -1,0 +1,6 @@
+[submodule "firmware/external/esp-idf"]
+	path = firmware/external/esp-idf
+	url = https://github.com/espressif/esp-idf
+[submodule "firmware/components/esp32-camera"]
+	path = firmware/components/esp32-camera
+	url = git@github.com:Zeta-Chrome/esp32-camera.git

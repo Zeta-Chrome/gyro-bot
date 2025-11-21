@@ -1,0 +1,10 @@
+.cache/
+.venv/
+build/
+managed_components/
+sdkconfig.old
+dependencies.lock
+env.sh
+.nvim.lua
+.clangd
+compile_commands.json
