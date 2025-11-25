@@ -19,7 +19,9 @@
 #define CAM_PIN_VSYNC 25
 #define CAM_PIN_HREF 23
 #define CAM_PIN_PCLK 22
-constexpr size_t MAX_JPEG_SIZE = 30000;  // Max JPEG size for QVGA @ quality 80
+
+constexpr size_t FRAME_SIZE = 320*240*2;
+constexpr size_t MAX_JPEG_SIZE = FRAME_SIZE / 5;
 
 class Camera
 {
@@ -29,10 +31,11 @@ public:
 
     bool initialize(pixformat_t format, size_t fb_count, camera_grab_mode_t grab_mode,
                     uint8_t quality = 0);
+    void deinitialize();
     camera_fb_t* capture_frame();
     void return_frame(camera_fb_t* fb);
 
-    jpeg_error_t convert_to_jpeg(camera_fb_t* fb, camera_fb_t* outbuf);
+    jpeg_error_t convert_to_jpeg(camera_fb_t* fb, uint8_t* out_data, uint32_t* size);
 
 private:
     bool m_initialized;

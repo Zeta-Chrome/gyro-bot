@@ -12,6 +12,7 @@
 WiFiStation::WiFiStation()
 {
     m_event_group = xEventGroupCreate();
+    m_event_conn = xEventGroupCreate();
     ESP_LOGI(m_TAG, "Initializing Station Mode...");
 
     ESP_ERROR_CHECK(esp_netif_init());
@@ -142,6 +143,7 @@ void WiFiStation::wifi_event_handler(void* arg, esp_event_base_t event_base, int
         ESP_LOGI(self->m_TAG, "Got IP:" IPSTR, IP2STR(&event->ip_info.ip));
         self->m_retry_num = 0;
         xEventGroupSetBits(self->m_event_group, WIFI_CONNECTED_BIT);
+        xEventGroupSetBits(self->m_event_conn, WIFI_CONNECTED_BIT);
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
@@ -151,18 +153,20 @@ void WiFiStation::wifi_event_handler(void* arg, esp_event_base_t event_base, int
             self->m_retry_num++;
             ESP_LOGI(self->m_TAG, "Retrying to connect to the AP, attempt %d", self->m_retry_num);
             xEventGroupSetBits(self->m_event_group, WIFI_RETRY_BIT);
+            xEventGroupClearBits(self->m_event_conn, WIFI_CONNECTED_BIT);
         }
         else
         {
-            xEventGroupSetBits(self->m_event_group, WIFI_FAIL_BIT);
             ESP_LOGI(self->m_TAG, "Failed to connect after %d attempts", MAXIMUM_RETRY);
+            xEventGroupSetBits(self->m_event_group, WIFI_FAIL_BIT);
+            xEventGroupSetBits(self->m_event_conn, WIFI_CONNECTED_BIT);
         }
     }
 }
 
 void WiFiStation::wait_for_wifi()
 {
-    xEventGroupWaitBits(m_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+    xEventGroupWaitBits(m_event_conn, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
 }
 
 const EventGroupHandle_t& WiFiStation::get_wifi_event()

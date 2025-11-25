@@ -25,6 +25,7 @@ public:
     int set_timeout(size_t timeout_ms);
     int send_data(const uint8_t* payload, size_t length);
     int receive_data(uint8_t* buffer, size_t buffer_len);
+    int receive_ip(char* buffer);
     UDPMode get_mode() const { return m_mode; }
 
 private:

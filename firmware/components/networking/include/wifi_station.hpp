@@ -36,6 +36,7 @@ private:
     esp_event_handler_instance_t m_wifi_event_instance;
     esp_event_handler_instance_t m_ip_event_instance;
     EventGroupHandle_t m_event_group;
+    EventGroupHandle_t m_event_conn;
     const char* m_TAG = "WIFI";
     esp_netif_t* staNetif;
     size_t m_retry_num = 0;

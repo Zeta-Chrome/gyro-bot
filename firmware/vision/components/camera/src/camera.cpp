@@ -42,7 +42,7 @@ bool Camera::initialize(pixformat_t format, size_t fb_count, camera_grab_mode_t 
     config.pin_sccb_scl = CAM_PIN_SIOC;
     config.pin_pwdn = CAM_PIN_PWDN;
     config.pin_reset = CAM_PIN_RESET;
-    config.xclk_freq_hz = 10000000;
+    config.xclk_freq_hz = 12000000;
     config.grab_mode = grab_mode;
     config.pixel_format = format;
     config.frame_size = FRAMESIZE_QVGA;
@@ -65,7 +65,7 @@ bool Camera::initialize(pixformat_t format, size_t fb_count, camera_grab_mode_t 
         jpeg_enc_cfg.width = 320;
         jpeg_enc_cfg.height = 240;
         jpeg_enc_cfg.quality = quality;
-        jpeg_enc_cfg.task_enable = true;
+        jpeg_enc_cfg.task_enable = false;
         jpeg_enc_cfg.hfm_task_priority = 5;
         jpeg_enc_cfg.hfm_task_core = 1;
 
@@ -99,6 +99,11 @@ bool Camera::initialize(pixformat_t format, size_t fb_count, camera_grab_mode_t 
     return true;
 }
 
+void Camera::deinitialize()
+{
+    esp_camera_deinit();
+}
+
 camera_fb_t* Camera::capture_frame()
 {
     return esp_camera_fb_get();
@@ -110,14 +115,14 @@ void Camera::return_frame(camera_fb_t* fb)
         esp_camera_fb_return(fb);
 }
 
-jpeg_error_t Camera::convert_to_jpeg(camera_fb_t* fb, camera_fb_t* outbuf)
+jpeg_error_t Camera::convert_to_jpeg(camera_fb_t* fb, uint8_t* out_data, uint32_t* size)
 {
     jpeg_error_t ret = JPEG_ERR_OK;
     int len;
-    ret = jpeg_enc_process(m_jpeg_enc, fb->buf, (int)fb->len, outbuf->buf, MAX_JPEG_SIZE, &len);
-    if (ret != JPEG_ERR_OK) 
+    ret = jpeg_enc_process(m_jpeg_enc, fb->buf, (int)fb->len, out_data, MAX_JPEG_SIZE, &len);
+    if (ret != JPEG_ERR_OK)
         return ret;
 
-    outbuf->len = len;
+    *size = (uint32_t)len;
     return JPEG_ERR_OK;
 }

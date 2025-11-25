@@ -1,8 +1,8 @@
 #include "udp_client.hpp"
 #include <esp_log.h>
 
-UDPClient::UDPClient(UDPMode mode, const char* dest_ip, uint16_t port)
-    : m_mode(mode), m_port(port), m_sock(-1)
+UDPClient::UDPClient(UDPMode mode, const char* dest_ip, uint16_t port) :
+    m_mode(mode), m_port(port), m_sock(-1)
 {
     if (m_mode != UDPMode::TRANSMITTER)
     {
@@ -11,11 +11,10 @@ UDPClient::UDPClient(UDPMode mode, const char* dest_ip, uint16_t port)
     }
 
     strncpy(m_ip, dest_ip, sizeof(m_ip) - 1);
-    m_ip[sizeof(m_ip) - 1] = '\0';
 }
 
-UDPClient::UDPClient(UDPMode mode, uint16_t listen_port, size_t buffer_size)
-    : m_mode(mode), m_port(listen_port), m_buffer_size(buffer_size), m_sock(-1)
+UDPClient::UDPClient(UDPMode mode, uint16_t listen_port, size_t buffer_size) :
+    m_mode(mode), m_port(listen_port), m_buffer_size(buffer_size), m_sock(-1)
 {
     if (m_mode != UDPMode::RECEIVER)
     {
@@ -68,18 +67,43 @@ int UDPClient::start(bool non_blocking)
         m_addr.sin_family = AF_INET;
         m_addr.sin_port = htons(m_port);
 
-        // Enable broadcast
-        int enable = 1;
-        if (setsockopt(m_sock, SOL_SOCKET, SO_BROADCAST, &enable, sizeof(enable)) < 0)
-        {
-            ESP_LOGE(m_TAG, "Failed to enable broadcast: errno %d", errno);
-            close(m_sock);
-            m_sock = -1;
-            return errno;
-        }
+        // Check if IP is multicast (224.0.0.0 to 239.255.255.255)
+        uint32_t ip_val = ntohl(m_addr.sin_addr.s_addr);
+        bool is_multicast = (ip_val >= 0xE0000000 && ip_val <= 0xEFFFFFFF);
 
-        ESP_LOGI(m_TAG, "UDP Sender started - dest: %s:%d, sock: %d, buffer: %d", 
-                 m_ip, m_port, m_sock, m_buffer_size);
+        if (is_multicast)
+        {
+            // Enable multicast
+            uint8_t ttl = 2;  // TTL for local network
+            if (setsockopt(m_sock, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl)) < 0)
+            {
+                ESP_LOGE(m_TAG, "Failed to set multicast TTL: errno %d", errno);
+                close(m_sock);
+                m_sock = -1;
+                return errno;
+            }
+
+            // Optional: disable loopback
+            uint8_t loopback = 0;
+            setsockopt(m_sock, IPPROTO_IP, IP_MULTICAST_LOOP, &loopback, sizeof(loopback));
+
+            ESP_LOGI(m_TAG, "UDP Multicast Sender started - dest: %s:%d, sock: %d, TTL: %d", m_ip,
+                     m_port, m_sock, ttl);
+        }
+        else
+        {
+            // Enable broadcast for non-multicast addresses
+            int enable = 1;
+            if (setsockopt(m_sock, SOL_SOCKET, SO_BROADCAST, &enable, sizeof(enable)) < 0)
+            {
+                ESP_LOGE(m_TAG, "Failed to enable broadcast: errno %d", errno);
+                close(m_sock);
+                m_sock = -1;
+                return errno;
+            }
+            ESP_LOGI(m_TAG, "UDP Broadcast Sender started - dest: %s:%d, sock: %d", m_ip, m_port,
+                     m_sock);
+        }
     }
     else
     {
@@ -100,13 +124,12 @@ int UDPClient::start(bool non_blocking)
             return errno;
         }
 
-        ESP_LOGI(m_TAG, "UDP Receiver started - port: %d, sock: %d, buffer: %d", 
-                 m_port, m_sock, m_buffer_size);
+        ESP_LOGI(m_TAG, "UDP Receiver started - port: %d, sock: %d, buffer: %d", m_port, m_sock,
+                 m_buffer_size);
     }
 
     return 0;
 }
-
 
 void UDPClient::end()
 {
@@ -153,8 +176,8 @@ int UDPClient::send_data(const uint8_t* payload, size_t length)
     }
 
     // Send with MSG_DONTWAIT for non-blocking behavior
-    int err = sendto(m_sock, payload, length, MSG_DONTWAIT, 
-                     (struct sockaddr*)&m_addr, sizeof(m_addr));
+    int err = sendto(m_sock, payload, length, MSG_DONTWAIT, (struct sockaddr*)&m_addr,
+                     sizeof(m_addr));
 
     if (err < 0)
     {
@@ -163,7 +186,7 @@ int UDPClient::send_data(const uint8_t* payload, size_t length)
         {
             return 0;  // Try again later
         }
-        
+
         ESP_LOGE(m_TAG, "Send failed: errno %d", errno);
         return -errno;
     }
@@ -191,10 +214,7 @@ int UDPClient::receive_data(uint8_t* buffer, size_t buffer_len)
         return -1;
     }
 
-    socklen_t addr_len = sizeof(m_addr);
-
-    int len = recvfrom(m_sock, buffer, buffer_len, 0, 
-                       (struct sockaddr*)&m_addr, &addr_len);
+    int len = recvfrom(m_sock, buffer, buffer_len, 0, NULL, NULL);
 
     if (len < 0)
     {
@@ -207,3 +227,58 @@ int UDPClient::receive_data(uint8_t* buffer, size_t buffer_len)
 
     return len;
 }
+
+int UDPClient::receive_ip(char* buffer)
+{
+    if (m_mode != UDPMode::RECEIVER)
+    {
+        ESP_LOGE(m_TAG, "Cannot receive - not in RECEIVER mode");
+        return -1;
+    }
+
+    if (!buffer)
+    {
+        ESP_LOGE(m_TAG, "Invalid buffer or length");
+        return -1;
+    }
+
+    if (m_sock < 0)
+    {
+        ESP_LOGE(m_TAG, "Socket not initialized");
+        return -1;
+    }
+
+    uint8_t temp_buf[64];
+
+    socklen_t addr_len = sizeof(m_addr);
+    int len = recvfrom(
+        m_sock,
+        temp_buf,
+        sizeof(temp_buf),
+        0,
+        (struct sockaddr*)&m_addr,
+        &addr_len
+    );
+
+    if (len < 0)
+    {
+        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+            return 0;
+
+        ESP_LOGE(m_TAG, "IP Receive failed: errno %d", errno);
+        return -errno;
+    }
+
+    const char* ip_str = inet_ntoa(((struct sockaddr_in*)&m_addr)->sin_addr);
+
+    if (!ip_str)
+    {
+        ESP_LOGE(m_TAG, "inet_ntoa() failed");
+        return -1;
+    }
+
+    strncpy(buffer, ip_str, 15);
+
+    return len; 
+}
+
