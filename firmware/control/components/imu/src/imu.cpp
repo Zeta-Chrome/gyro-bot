@@ -57,7 +57,7 @@ void IMU::i2c_master_init()
     bus_config.scl_io_num = I2C_MASTER_SCL_IO;
     bus_config.clk_source = I2C_CLK_SRC_DEFAULT;
     bus_config.glitch_ignore_cnt = 7;
-    bus_config.flags.enable_internal_pullup = true;
+    bus_config.flags.enable_internal_pullup = false;
     ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &m_bus_handle));
 
     i2c_device_config_t dev_config = {};

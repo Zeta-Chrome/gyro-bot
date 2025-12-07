@@ -14,7 +14,7 @@ public:
     esp_err_t init();
     
     // Measure distance in centimeters (returns -1.0f on error)
-    float measure_cm(uint32_t max_distance_cm = 400);
+    float measure_cm(uint32_t max_distance_cm = 600);
     
 private:
     gpio_num_t m_trig;
@@ -26,7 +26,7 @@ private:
     static constexpr uint32_t MIN_DELAY_BETWEEN_MEASUREMENTS_US = 60000; // 60ms minimum
     static constexpr float ROUNDTRIP_CM = 58.0f;
     
-    int64_t m_last_measurement_time;
+    int64_t m_last_measurement_time = 0;
     
     static portMUX_TYPE s_mux;
     
@@ -34,3 +34,4 @@ private:
         return (esp_timer_get_time() - start) >= len;
     }
 };
+

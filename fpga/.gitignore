@@ -1,0 +1,59 @@
+# Vivado files
+*.jou
+*.log
+*.str
+*.zip
+*.tmp
+*.backup.*
+vivado*.jou
+vivado*.log
+.Xil/
+project/
+work/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+
+# Synthesis files
+*.dcp
+*.bit
+*.bin
+*.ltx
+*.mmi
+*.prm
+
+# Simulation files
+*.wdb
+*.wcfg
+xsim.dir/
+*.pb
+modelsim.ini
+transcript
+vsim.wlf
+work/
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Build artifacts
+build/
+output/
+*.rpt
+*.xml
+
+# Keep these
+!scripts/**/*.tcl
+!scripts/**/*.py

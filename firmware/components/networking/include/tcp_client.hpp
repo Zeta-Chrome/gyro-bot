@@ -16,7 +16,7 @@ public:
     TCPClient(TCPMode mode, uint16_t listen_port, size_t buffer_size = 512);
     ~TCPClient();
 
-    int start(bool is_blocking);
+    int start(bool is_blocking = true);
     int send_data(const uint8_t* payload, size_t length);
     int receive_data(uint8_t* buffer, size_t buffer_len);
     void end();

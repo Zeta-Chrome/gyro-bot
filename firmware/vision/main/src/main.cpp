@@ -16,11 +16,10 @@ constexpr gpio_num_t INTERRUPT_PIN = GPIO_NUM_2;
 constexpr uint8_t JPEG_QUALITY = 45;
 constexpr TickType_t JPEG_TASK_DELAY = pdMS_TO_TICKS(15);
 constexpr uint16_t DISCOVERY_PORT = 9009;
-constexpr uint16_t TX_PORT = 9006;
+constexpr uint16_t TX_PORT = 9005;
 constexpr size_t CHUNK_PAYLOAD_SIZE = 1024;
 constexpr uint8_t STATS_WINDOW_SIZE = 50;
 constexpr TickType_t TX_TASK_DELAY = pdMS_TO_TICKS(5);
-constexpr TickType_t TCP_TX_TASK_DELAY = pdMS_TO_TICKS(5);
 constexpr uint16_t TCP_RX_PORT = 9002;
 constexpr TickType_t TCP_RX_TASK_DELAY = pdMS_TO_TICKS(1000);
 constexpr uint8_t FB_QUEUE_SAFE_THRESHOLD = 2;
@@ -255,7 +254,6 @@ void jpeg_enc_task(void* args)
     }
 }
 
-#if HOTSPOT_MODE
 void udp_discover_task(void* args)
 {
     const char* TAG = "DISCOVERY";
@@ -268,7 +266,7 @@ void udp_discover_task(void* args)
     }
 
     UDPClient udp_rx(UDPMode::RECEIVER, DISCOVERY_PORT);
-    if (udp_rx.start(true) != 0)
+    if (udp_rx.start() != 0)
     {
         ESP_LOGE(TAG, "UDP init failed!");
         vTaskDelete(NULL);
@@ -329,7 +327,6 @@ void tcp_tx_task(void* args)
     uint64_t total_time_us = 0;
     size_t failed_frames = 0;
     size_t total_bytes_sent = 0;
-    uint64_t start_us = esp_timer_get_time();
 
     while (true)
     {
@@ -347,6 +344,7 @@ void tcp_tx_task(void* args)
 
         while (true)
         {
+            uint64_t start_us = esp_timer_get_time();
             JPEGEntry& jpeg_buf = ctx->jpeg_ring.pop_buffer();
 
             FrameHeader* frame_header = (FrameHeader*)packet_buf;
@@ -391,9 +389,8 @@ void tcp_tx_task(void* args)
             }
 
             xEventGroupSetBits(ctx->station.get_wifi_event(), TX_SUCCESS_BIT);
-            vTaskDelay(TCP_TX_TASK_DELAY);
+            vTaskDelay(TX_TASK_DELAY);
 
-            start_us = esp_timer_get_time();
             frame_id++;
         }
 
@@ -404,127 +401,6 @@ void tcp_tx_task(void* args)
     free(packet_buf);
 }
 
-#else
-void udp_tx_task(void* args)
-{
-    const char* TAG = "UDP_TX";
-    VisionContext* ctx = static_cast<VisionContext*>(args);
-    if (!ctx)
-    {
-        ESP_LOGE(TAG, "NULL context!");
-        vTaskDelete(NULL);
-        return;
-    }
-
-    UDPClient udp_tx(UDPMode::TRANSMITTER, ctx->dest_ip, TX_PORT);
-    if (udp_tx.start(true) != 0)
-    {
-        ESP_LOGE(TAG, "UDP init failed!");
-        vTaskDelete(NULL);
-        return;
-    }
-
-    const size_t MAX_PACKET = sizeof(ChunkHeader) + CHUNK_PAYLOAD_SIZE;
-    uint8_t* packet_buf = (uint8_t*)malloc(MAX_PACKET);
-    if (!packet_buf)
-    {
-        ESP_LOGE(TAG, "Packet buffer malloc failed!");
-        vTaskDelete(NULL);
-        return;
-    }
-
-    uint32_t frame_id = 0;
-    size_t frame_count = 0;
-    uint64_t total_time_us = 0;
-    size_t failed_frames = 0;
-    size_t total_bytes_sent = 0;
-    size_t total_chunks_sent = 0;
-    uint16_t chunk_size;
-    uint64_t start_us = esp_timer_get_time();
-
-    while (true)
-    {
-        JPEGEntry& jpeg_buf = ctx->jpeg_ring.pop_buffer();
-
-        uint16_t total_chunks = (jpeg_buf.size + CHUNK_PAYLOAD_SIZE - 1) / CHUNK_PAYLOAD_SIZE;
-        bool frame_success = true;
-
-        ChunkHeader* chunk_header = (ChunkHeader*)packet_buf;
-        chunk_header->frame_id = htonl(frame_id);
-        chunk_header->total_chunks = total_chunks;
-        chunk_header->ms = htonl(jpeg_buf.ms);
-
-        for (uint16_t i = 0; i < total_chunks; i++)
-        {
-            ctx->station.wait_for_wifi();
-
-            chunk_header->chunk_idx = i;
-
-            size_t offset = i * CHUNK_PAYLOAD_SIZE;
-            size_t remaining = jpeg_buf.size - offset;
-            chunk_size = (remaining < CHUNK_PAYLOAD_SIZE) ? remaining : CHUNK_PAYLOAD_SIZE;
-            chunk_header->chunk_size = htons(chunk_size);
-
-            memcpy(packet_buf + sizeof(ChunkHeader), jpeg_buf.data + offset, chunk_size);
-
-            size_t packet_size = sizeof(ChunkHeader) + chunk_size;
-            int result = udp_tx.send_data(packet_buf, packet_size);
-
-            if (result <= 0)
-            {
-                ESP_LOGW(TAG, "TX failed for frame %u chunk %u/%u", frame_id, i, total_chunks);
-                frame_success = false;
-                break;
-            }
-
-            total_chunks_sent++;
-        }
-
-        ctx->jpeg_ring.release_buffer(jpeg_buf);
-
-        if (!frame_success)
-        {
-            failed_frames++;
-            xEventGroupClearBits(ctx->station.get_wifi_event(), TX_SUCCESS_BIT);
-        }
-        else
-        {
-            uint64_t end_us = esp_timer_get_time();
-            total_time_us += end_us - start_us;
-            total_bytes_sent += jpeg_buf.size;
-            frame_count++;
-
-            if (frame_count >= STATS_WINDOW_SIZE)
-            {
-                float avg_ms = (float)total_time_us / 1000.0f / frame_count;
-                float fps = 1000000.0f * frame_count / total_time_us;
-                float avg_jpeg_kb = (float)total_bytes_sent / 1024.0f / frame_count;
-                float avg_chunks = (float)total_chunks_sent / frame_count;
-                float success_rate = 100.0f * frame_count / (frame_count + failed_frames);
-
-                ESP_LOGI(TAG,
-                         "TX: %.2f ms/frame | %.2f FPS | %.1f KB avg | %.1f chunks/frame | "
-                         "Success: %.1f%%",
-                         avg_ms, fps, avg_jpeg_kb, avg_chunks, success_rate);
-
-                frame_count = 0;
-                total_time_us = 0;
-                total_bytes_sent = 0;
-                total_chunks_sent = 0;
-                failed_frames = 0;
-            }
-            xEventGroupSetBits(ctx->station.get_wifi_event(), TX_SUCCESS_BIT);
-        }
-
-        vTaskDelay(TX_TASK_DELAY);
-
-        start_us = esp_timer_get_time();
-        frame_id++;
-    }
-
-    free(packet_buf);
-}
-#endif
 
 void tcp_rx_task(void* args)
 {
@@ -601,17 +477,12 @@ extern "C" void app_main(void)
     xTaskCreate(led_wifi_notifier_task, "LED_NOTIFIER", 1024, ctx, 1, NULL);
 
     ctx->station.wait_for_wifi();
+    ctx->station.get_broadcast_ip(ctx->dest_ip, sizeof(ctx->dest_ip));
 
     xTaskCreate(cam_task, "CAM", 4096, ctx, 2, &ctx->cam_task);
     xTaskCreate(jpeg_enc_task, "JPEG_ENC", 8192, ctx, 3, NULL);
-
-#if HOTSPOT_MODE
     xTaskCreate(udp_discover_task, "TCP_DISCOVER", 4096, ctx, 2, NULL);
     xTaskCreate(tcp_tx_task, "TCP_TX", 5120, ctx, 2, &ctx->tx_task);
-#else
-    xTaskCreate(udp_tx_task, "UDP_TX", 4096, ctx, 2, NULL);
-#endif
-
     xTaskCreate(tcp_rx_task, "TCP_RX", 3072, ctx, 1, NULL);
 
 #if TESTING

@@ -28,10 +28,6 @@ esp_err_t UltrasoundSensor::init()
 
 float UltrasoundSensor::measure_cm(uint32_t max_distance_cm)
 {
-    // Absolute maximum time this function can take
-    int64_t function_start = esp_timer_get_time();
-    const int64_t MAX_FUNCTION_TIME_US = 50000; // 50ms hard limit
-    
     // Ensure minimum delay between measurements
     int64_t now = esp_timer_get_time();
     int64_t time_since_last = now - m_last_measurement_time;
@@ -50,7 +46,7 @@ float UltrasoundSensor::measure_cm(uint32_t max_distance_cm)
     gpio_set_level(m_trig, 0);
     portEXIT_CRITICAL(&s_mux);  // Exit critical section immediately
     
-    // Check if echo is already high (error condition)
+    // Check if echo is already high
     if (gpio_get_level(m_echo))
     {
         m_last_measurement_time = esp_timer_get_time();
@@ -62,16 +58,6 @@ float UltrasoundSensor::measure_cm(uint32_t max_distance_cm)
     int64_t start = esp_timer_get_time();
     while (!gpio_get_level(m_echo))
     {
-        int64_t now = esp_timer_get_time();
-        
-        // Hard timeout check (absolute safety)
-        if ((now - function_start) > MAX_FUNCTION_TIME_US)
-        {
-            m_last_measurement_time = now;
-            ESP_LOGE("US", "Hard timeout waiting for echo start");
-            return -1.0f;
-        }
-        
         // Normal timeout check
         if (timeout_expired(start, PING_TIMEOUT))
         {
@@ -89,14 +75,6 @@ float UltrasoundSensor::measure_cm(uint32_t max_distance_cm)
     while (gpio_get_level(m_echo))
     {
         time = esp_timer_get_time();
-        
-        // Hard timeout check (absolute safety)
-        if ((time - function_start) > MAX_FUNCTION_TIME_US)
-        {
-            m_last_measurement_time = time;
-            ESP_LOGE("US", "Hard timeout measuring echo duration");
-            return -1.0f;
-        }
         
         // Normal timeout check
         if (timeout_expired(echo_start, max_time_us))

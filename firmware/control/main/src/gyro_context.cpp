@@ -1,9 +1,14 @@
+
 #include "gyro_context.hpp"
 #include <nvs_flash.h>
 
-GyroContext::GyroContext() : imu(), ultrasound(GPIO_NUM_25, GPIO_NUM_19), queues_initialized(false)
+GyroContext::GyroContext() :
+    imu(),
+    ultrasound(GPIO_NUM_13, GPIO_NUM_34), motor_driver(GPIO_NUM_26, GPIO_NUM_27, GPIO_NUM_25, GPIO_NUM_33), queues_initialized(false)
 {
     load_pid_from_nvs();
+
+    motor_driver.set_motor_speeds(0.0f, 0.0f);
 
     // Create mutex first
     ctx_mutex = xSemaphoreCreateMutex();

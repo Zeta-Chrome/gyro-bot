@@ -1,5 +1,6 @@
 #include "gyro_context.hpp"
-#include "utils.hpp"
+#include "common.hpp"
+#include <cstdint>
 #include <wifi_station.hpp>
 #include <imu.hpp>
 #include <ultrasound_sensor.hpp>
@@ -15,13 +16,29 @@
 #include <freertos/task.h>
 #include <math.h>
 
-constexpr gpio_num_t BLUE_LED_GPIO = GPIO_NUM_2;
-constexpr gpio_num_t CAM_TRIG_GPIO = GPIO_NUM_33;
+constexpr gpio_num_t BLUE_LED_PIN = GPIO_NUM_2;
+constexpr gpio_num_t SERVO_PIN = GPIO_NUM_32;
+constexpr gpio_num_t CAM_TRIG_PIN = GPIO_NUM_4;
 constexpr uint16_t UDP_RX_PORT = 9000;
 constexpr uint16_t UDP_TX_PORT = 9001;
 constexpr uint16_t TCP_RX_PORT = 9002;
 constexpr float MAX_TILT_ANGLE = 5.0f;
-constexpr float MAX_TURN = 0.5f;
+constexpr float MAX_TURN = 0.2f;
+
+void status_blink(GyroContext* ctx, uint16_t high, uint16_t low, uint32_t status_bits)
+{
+    while (true)
+    {
+        gpio_set_level(BLUE_LED_PIN, 1);
+        vTaskDelay(pdMS_TO_TICKS(high));
+        gpio_set_level(BLUE_LED_PIN, 0);
+        vTaskDelay(pdMS_TO_TICKS(low));
+
+        EventBits_t now = xEventGroupGetBits(ctx->station.get_wifi_event());
+        if (now & status_bits)
+            return;
+    }
+}
 
 void led_wifi_notifier_task(void* args)
 {
@@ -33,39 +50,23 @@ void led_wifi_notifier_task(void* args)
         return;
     }
 
-    gpio_reset_pin(BLUE_LED_GPIO);
-    gpio_set_direction(BLUE_LED_GPIO, GPIO_MODE_OUTPUT);
-    gpio_set_level(BLUE_LED_GPIO, 0);
+    gpio_reset_pin(BLUE_LED_PIN);
+    gpio_set_direction(BLUE_LED_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(BLUE_LED_PIN, 0);
 
     EventBits_t bits;
     while (true)
     {
         bits = xEventGroupWaitBits(ctx->station.get_wifi_event(),
-                                   WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | WIFI_RETRY_BIT, pdTRUE,
-                                   pdFALSE, portMAX_DELAY);
+                                   WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | WIFI_RETRY_BIT,
+                                   pdTRUE, pdFALSE, portMAX_DELAY);
 
         if (bits & WIFI_CONNECTED_BIT)
-        {
-            gpio_set_level(BLUE_LED_GPIO, 1);
-        }
+            gpio_set_level(BLUE_LED_PIN, 1);
         else if (bits & WIFI_FAIL_BIT)
-        {
-            gpio_set_level(BLUE_LED_GPIO, 0);
-        }
-        else
-        {
-            while (true)
-            {
-                gpio_set_level(BLUE_LED_GPIO, 1);
-                vTaskDelay(pdMS_TO_TICKS(250));
-                gpio_set_level(BLUE_LED_GPIO, 0);
-                vTaskDelay(pdMS_TO_TICKS(250));
-
-                EventBits_t now = xEventGroupGetBits(ctx->station.get_wifi_event());
-                if (now & (WIFI_CONNECTED_BIT | WIFI_FAIL_BIT))
-                    break;
-            }
-        }
+            gpio_set_level(BLUE_LED_PIN, 0);
+        else if (bits & WIFI_RETRY_BIT)
+            status_blink(ctx, 500, 500, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
     }
 }
 
@@ -101,7 +102,7 @@ void imu_read_task(void* args)
     {
         const IMUData& data = ctx->imu.read_imu_data();
         TimestampedIMUData ts_data;
-        ts_data.timestamp_us = esp_timer_get_time();
+        ts_data.timestamp_ms = (uint32_t)esp_timer_get_time()/1000;
         ts_data.ax = data.ax;
         ts_data.ay = data.ay;
         ts_data.az = data.az;
@@ -138,99 +139,117 @@ void imu_read_task(void* args)
 void motor_control_task(void* args)
 {
     GyroContext* ctx = static_cast<GyroContext*>(args);
-    MotorDriver motor_driver(GPIO_NUM_4, GPIO_NUM_26, GPIO_NUM_27, GPIO_NUM_13);
-    motor_driver.set_motor_speeds(0.0f, 0.0f);
-
+    
     if (ctx == NULL)
     {
         ESP_LOGE("MOTOR_TASK", "FATAL: NULL context!");
         vTaskDelete(NULL);
         return;
     }
-
-    // Wait for queues
+    
     while (!ctx->queues_initialized)
         vTaskDelay(pdMS_TO_TICKS(10));
-
-    if (!ctx->is_queue_valid(ctx->imu_motor_queue) || !ctx->is_queue_valid(ctx->motor_queue))
+    
+    if (!ctx->is_queue_valid(ctx->motor_queue))
     {
-        ESP_LOGE("MOTOR_TASK", "FATAL: Invalid queues!");
+        ESP_LOGE("MOTOR_TASK", "FATAL: Invalid motor queue!");
         vTaskDelete(NULL);
         return;
     }
-
-    ESP_LOGI("MOTOR_TASK", "Started successfully");
-
+    
+#if TESTING == 0
+    if (!ctx->is_queue_valid(ctx->imu_motor_queue))
+    {
+        ESP_LOGE("MOTOR_TASK", "FATAL: Invalid IMU queue!");
+        vTaskDelete(NULL);
+        return;
+    }
+#endif
+    
+    ESP_LOGI("MOTOR_TASK", "Started in %s mode", TESTING ? "TESTING" : "BALANCE");
+    
+#if TESTING == 0
     float prev_error = 0.0f;
     float integral = 0.0f;
-
-    ControlData control = {0.0f, 0.0f, 0};
     TimestampedIMUData imu_data;
     int64_t prev_timestamp = 0;
-
+#endif
+    
+    ControlData control = {0.0f, 0.0f, 0};
+    
     while (true)
     {
-        // FIXED: Read PID values every iteration (they can be updated via TCP)
+#if TESTING == 0
         float Kp = ctx->pid_params.kp;
         float Ki = ctx->pid_params.ki;
         float Kd = ctx->pid_params.kd;
-
-        // Safe queue receive with validation
+        
         if (!ctx->is_queue_valid(ctx->imu_motor_queue))
         {
             ESP_LOGE("MOTOR_TASK", "Queue corrupted!");
-            motor_driver.set_motor_speeds(0.0f, 0.0f);
+            ctx->motor_driver.set_motor_speeds(0.0f, 0.0f);
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
-
-        if (xQueueReceive(ctx->imu_motor_queue, &imu_data, portMAX_DELAY) != pdTRUE)
+        
+        if (xQueueReceive(ctx->imu_motor_queue, &imu_data, pdMS_TO_TICKS(500)) != pdTRUE)
+        {
+            ESP_LOGW("MOTOR_TASK", "IMU timeout - stopping motors");
+            prev_error = 0.0f;
+            integral = 0.0f;
+            continue;  // Keep looping to prevent watchdog
+        }
+        
+        if (imu_data.timestamp_ms == prev_timestamp)
             continue;
-
-        if (imu_data.timestamp_us == prev_timestamp)
-            continue;
-
+        
         float dt = 0.01f;
         if (prev_timestamp != 0)
-            dt = (imu_data.timestamp_us - prev_timestamp) / 1e6f;
+            dt = (imu_data.timestamp_ms - prev_timestamp) / 1e3f;
         dt = fmaxf(0.001f, fminf(dt, 0.05f));
-        prev_timestamp = imu_data.timestamp_us;
-
+        prev_timestamp = imu_data.timestamp_ms;
+        
         const Pitch& pitch = ctx->imu.get_pitch(dt, FilterType::COMPLEMENTARY);
-
-        // Safe peek at control queue
+        
         if (ctx->is_queue_valid(ctx->motor_queue))
             xQueuePeek(ctx->motor_queue, &control, 0);
-
+        
         float forward = control.magnitude * cos(control.angle * M_PI / 180.0f);
         float turn = control.magnitude * sin(control.angle * M_PI / 180.0f);
-
         float target_pitch = forward * MAX_TILT_ANGLE;
-
-        // Error is positive when robot tips forward (needs backward correction)
+        
         float error = target_pitch - pitch.angle;
-
         integral += error * dt;
-        integral = fmaxf(-0.5f, fminf(0.5f, integral));  // Anti-windup
-
+        integral = fmaxf(-0.5f, fminf(0.5f, integral));
         float derivative = (error - prev_error) / dt;
         prev_error = error;
-
+        
         float balance_output = Kp * error + Ki * integral + Kd * derivative;
-
-        // Apply turning
+        
         float left_speed = balance_output - (turn * MAX_TURN);
         float right_speed = balance_output + (turn * MAX_TURN);
-
-        // Clamp to valid range
+        
         left_speed = fmaxf(-1.0f, fminf(1.0f, left_speed));
         right_speed = fmaxf(-1.0f, fminf(1.0f, right_speed));
-
-        // motor_driver.set_motor_speeds(left_speed, right_speed);
-
-        // ✓ ADDED: Debug logging (optional, remove if too verbose)
-        ESP_LOGI("MOTOR", "pitch=%.2f, target=%.2f, err=%.2f, out=%.2f, L=%.2f, R=%.2f",
-                 pitch.angle, target_pitch, error, balance_output, left_speed, right_speed);
+        
+        ctx->motor_driver.set_motor_speeds(left_speed, right_speed);
+        
+#else
+        if (xQueueReceive(ctx->motor_queue, &control, pdMS_TO_TICKS(100)) == pdTRUE)
+        {
+            float forward = control.magnitude * cos(control.angle * M_PI / 180.0f);
+            float turn = control.magnitude * sin(control.angle * M_PI / 180.0f);
+            
+            float left_speed = forward - turn;
+            float right_speed = forward + turn;
+            
+            left_speed = fmaxf(-1.0f, fminf(1.0f, left_speed));
+            right_speed = fmaxf(-1.0f, fminf(1.0f, right_speed));
+            
+            ctx->motor_driver.set_motor_speeds(left_speed, right_speed);
+        }
+#endif
+        taskYIELD();
     }
 }
 
@@ -259,7 +278,7 @@ void servo_control_task(void* args)
 
     ESP_LOGI("SERVO_TASK", "Started successfully");
 
-    Servo servo(GPIO_NUM_18);
+    Servo servo(SERVO_PIN);
     float current_angle = 0.0f;
     float target_angle = 0.0f;
     int32_t new_target;
@@ -298,10 +317,10 @@ void ultrasound_read_task(void* args)
         return;
     }
 
-    // camera trigger gpio setup
-    gpio_reset_pin(CAM_TRIG_GPIO);
-    gpio_set_direction(CAM_TRIG_GPIO, GPIO_MODE_OUTPUT);
-    gpio_set_level(CAM_TRIG_GPIO, 0);
+    // // camera trigger gpio setup
+    // gpio_reset_pin(CAM_TRIG_PIN);
+    // gpio_set_direction(CAM_TRIG_PIN, GPIO_MODE_OUTPUT);
+    // gpio_set_level(CAM_TRIG_PIN, 0);
 
     // Wait for queues
     while (!ctx->queues_initialized)
@@ -317,6 +336,7 @@ void ultrasound_read_task(void* args)
     ESP_LOGI("US_TASK", "Started successfully");
 
     ctx->ultrasound.init();
+    vTaskDelay(pdMS_TO_TICKS(750));
     TimestampedUltrasound ts_data;
 
     while (true)
@@ -330,7 +350,7 @@ void ultrasound_read_task(void* args)
             continue;
         }
 
-        ts_data.timestamp_us = esp_timer_get_time();
+        ts_data.timestamp_ms = (uint32_t)esp_timer_get_time()/1000;
 
         // Safe send with validation
         if (ctx->is_queue_valid(ctx->ultrasound_queue))
@@ -345,10 +365,10 @@ void ultrasound_read_task(void* args)
             }
         }
 
-        gpio_set_level(CAM_TRIG_GPIO, 1);
-        vTaskDelay(pdMS_TO_TICKS(10));
-        gpio_set_level(CAM_TRIG_GPIO, 0);
-
+        // gpio_set_level(CAM_TRIG_PIN, 1);
+        // vTaskDelay(pdMS_TO_TICKS(10));
+        // gpio_set_level(CAM_TRIG_PIN, 0);
+    
         vTaskDelay(pdMS_TO_TICKS(90));
     }
 }
@@ -374,8 +394,7 @@ void udp_tx_task(void* args)
 
     ESP_LOGI("UDP_TX_TASK", "Starting...");
 
-    const char* bcast_ip = "255.255.255.255";
-    UDPClient udp_tx(UDPMode::TRANSMITTER, bcast_ip, UDP_TX_PORT);
+    UDPClient udp_tx(UDPMode::TRANSMITTER, ctx->dest_ip, UDP_TX_PORT);
 
     int err = udp_tx.start();
     if (err != 0)
@@ -459,7 +478,7 @@ void udp_rx_task(void* args)
 
     ESP_LOGI("UDP_RX_TASK", "Starting...");
 
-    UDPClient udp_receiver(UDPMode::RECEIVER, UDP_RX_PORT, sizeof(ControlData));
+    UDPClient udp_receiver(UDPMode::RECEIVER, UDP_RX_PORT, 4096);
 
     int err = udp_receiver.start();
     if (err != 0)
@@ -471,6 +490,7 @@ void udp_rx_task(void* args)
 
     uint8_t buffer[sizeof(ControlData)];
     ControlData control;
+    udp_receiver.set_timeout(3000);
 
     while (true)
     {
@@ -492,6 +512,10 @@ void udp_rx_task(void* args)
             {
                 xQueueOverwrite(ctx->servo_queue, &control.servo_angle);
             }
+        }
+        else if (ret == -11)
+        {
+            vTaskDelay(pdMS_TO_TICKS(100));
         }
         else if (ret < 0)
         {
@@ -577,6 +601,7 @@ void tcp_rx_task(void* args)
 
 extern "C" void app_main(void)
 {
+    esp_log_level_set("*", ESP_LOG_VERBOSE);
     initialize_nvs();
 
     // Create context with all queues
@@ -600,6 +625,7 @@ extern "C" void app_main(void)
     // Wait for WiFi before starting network tasks
     ESP_LOGI("MAIN", "Waiting for WiFi...");
     ctx->station.wait_for_wifi();
+    ctx->station.get_broadcast_ip(ctx->dest_ip, sizeof(ctx->dest_ip));
     ESP_LOGI("MAIN", "WiFi connected, starting network tasks");
 
     xTaskCreatePinnedToCore(ultrasound_read_task, "ULTRASOUND_READ", 2048, ctx, 3, NULL, 1);
@@ -609,4 +635,3 @@ extern "C" void app_main(void)
 
     ESP_LOGI("MAIN", "All tasks started successfully");
 }
-

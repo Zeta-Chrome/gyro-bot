@@ -74,7 +74,7 @@ void RingBuffer::release_buffer(JPEGEntry& entry)
     xQueueSend(m_free_queue, &idx, portMAX_DELAY);
 }
 
-VisionContext::VisionContext() : jpeg_ring(JPEG_RING_SIZE), dest_ip("239.1.1.1")
+VisionContext::VisionContext() : jpeg_ring(JPEG_RING_SIZE)
 {
     cam_fb_queue = xQueueCreate(FB_QUEUE_SIZE, sizeof(camera_fb_t*));
     

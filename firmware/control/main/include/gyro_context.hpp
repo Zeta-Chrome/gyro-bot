@@ -1,5 +1,6 @@
 #pragma once
 
+#include "motor_driver.hpp"
 #include <wifi_station.hpp>
 #include <imu.hpp>
 #include <ultrasound_sensor.hpp>
@@ -8,14 +9,14 @@
 
 struct TimestampedIMUData
 {
-    int64_t timestamp_us;
+    uint32_t timestamp_ms;
     float ax, ay, az;
     float gx, gy, gz;
 };
 
 struct TimestampedUltrasound
 {
-    int64_t timestamp_us;
+    uint32_t timestamp_ms;
     float distance_cm;
 };
 
@@ -46,7 +47,9 @@ public:
     WiFiStation station;
     IMU imu;
     UltrasoundSensor ultrasound;
+    MotorDriver motor_driver;
     PIDParams pid_params;
+    char dest_ip[16];
 
     QueueHandle_t imu_queue;
     QueueHandle_t imu_motor_queue;

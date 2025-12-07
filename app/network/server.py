@@ -92,7 +92,7 @@ class MultiPortServer:
                     break
 
                 timestamp_us, ax, ay, az, gx, gy, gz = struct.unpack_from(
-                    "q6f", data, offset
+                    "<I6f", data, offset
                 )
                 offset += imu_size
 
@@ -112,7 +112,7 @@ class MultiPortServer:
                 if offset + us_size > len(data):
                     break
 
-                timestamp_us, distance_cm = struct.unpack_from("qf", data, offset)
+                timestamp_us, distance_cm = struct.unpack_from("<If", data, offset)
                 offset += us_size
                 self.latest_distance = distance_cm
 

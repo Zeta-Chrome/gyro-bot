@@ -7,23 +7,12 @@ constexpr uint8_t MAX_CLIENTS = 2;
 constexpr uint8_t FB_QUEUE_SIZE = 3;
 constexpr uint8_t JPEG_RING_SIZE = 3;
 
-#if HOTSPOT_MODE
 struct FrameHeader
 {
     uint32_t frame_id;
     uint32_t ms;
     uint16_t size;
 } __attribute__((packed));
-#else
-struct ChunkHeader
-{
-    uint32_t frame_id;
-    uint8_t total_chunks;
-    uint32_t ms;
-    uint8_t chunk_idx;
-    uint16_t chunk_size;
-} __attribute__((packed));
-#endif
 
 struct JPEGEntry
 {

@@ -12,7 +12,7 @@ constexpr i2c_port_t I2C_MASTER_NUM = I2C_NUM_0;
 constexpr gpio_num_t I2C_MASTER_SDA_IO = GPIO_NUM_21;
 constexpr gpio_num_t I2C_MASTER_SCL_IO = GPIO_NUM_22;
 constexpr size_t I2C_MASTER_FREQ_HZ = 400000;
-constexpr size_t I2C_MASTER_TIMEOUT_MS = 1000;
+constexpr size_t I2C_MASTER_TIMEOUT_MS = 50;
 
 // Registers
 constexpr uint8_t SMPLRT_DIV_REG = 0x19;
