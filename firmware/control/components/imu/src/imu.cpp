@@ -139,15 +139,16 @@ void IMU::calibrate()
     {
         if (read_register(ACCEL_OUT_REG, buffer, 14) == ESP_OK)
         {
-            m_bias.ay += (float)(int16_t)((buffer[0] << 8) | buffer[1]) / m_accelSens;
-            m_bias.ax += (float)(int16_t)((buffer[2] << 8) | buffer[3]) / m_accelSens;
+            // FIXED: Correct axis order
+            m_bias.ax += (float)(int16_t)((buffer[0] << 8) | buffer[1]) / m_accelSens;
+            m_bias.ay += (float)(int16_t)((buffer[2] << 8) | buffer[3]) / m_accelSens;
             m_bias.az += (float)(int16_t)((buffer[4] << 8) | buffer[5]) / m_accelSens;
             m_bias.gx += (float)(int16_t)((buffer[8] << 8) | buffer[9]) / m_gyroSens;
             m_bias.gy += (float)(int16_t)((buffer[10] << 8) | buffer[11]) / m_gyroSens;
             m_bias.gz += (float)(int16_t)((buffer[12] << 8) | buffer[13]) / m_gyroSens;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(10));  // CHANGED: 10ms instead of 100ms (faster calibration)
+        vTaskDelay(pdMS_TO_TICKS(10));
 
         if (i % 100 == 0 && i > 0)
         {
@@ -162,7 +163,6 @@ void IMU::calibrate()
     m_bias.gy /= MAX_CALIBRATION_COUNT;
     m_bias.gz /= MAX_CALIBRATION_COUNT;
 
-    // CRITICAL: Remove gravity from Z-axis (assumes sensor is lying flat)
     m_bias.az -= 1.0f;
 
     ESP_ERROR_CHECK(save_calibration());
@@ -209,8 +209,8 @@ const IMUData& IMU::read_imu_data()
     uint8_t buffer[14];
     if (read_register(ACCEL_OUT_REG, buffer, 14) == ESP_OK)
     {
-        m_data.ay = (float)(int16_t)((buffer[0] << 8) | buffer[1]) / m_accelSens - m_bias.ay;
-        m_data.ax = (float)(int16_t)((buffer[2] << 8) | buffer[3]) / m_accelSens - m_bias.ax;
+        m_data.ax = (float)(int16_t)((buffer[0] << 8) | buffer[1]) / m_accelSens - m_bias.ax;
+        m_data.ay = (float)(int16_t)((buffer[2] << 8) | buffer[3]) / m_accelSens - m_bias.ay;
         m_data.az = (float)(int16_t)((buffer[4] << 8) | buffer[5]) / m_accelSens - m_bias.az;
         m_data.gx = (float)(int16_t)((buffer[8] << 8) | buffer[9]) / m_gyroSens - m_bias.gx;
         m_data.gy = (float)(int16_t)((buffer[10] << 8) | buffer[11]) / m_gyroSens - m_bias.gy;
@@ -218,7 +218,7 @@ const IMUData& IMU::read_imu_data()
     }
     else
     {
-        ESP_LOGW(m_TAG, "Failed to read IMU");  // Changed to LOGW instead of LOGI
+        ESP_LOGW(m_TAG, "Failed to read IMU");
     }
 
     return m_data;
@@ -231,9 +231,6 @@ void IMU::mahony_filter_update(float dt)
     float gy = m_data.gy * M_PI / 180.0f;
     float gz = m_data.gz * M_PI / 180.0f;
 
-    // Store angular rates in pose (ADDED)
-    m_pitch.rate = gy;
-
     // Normalize accelerometer
     float norm = sqrtf(m_data.ax * m_data.ax + m_data.ay * m_data.ay + m_data.az * m_data.az);
     if (norm == 0.0f)
@@ -242,7 +239,7 @@ void IMU::mahony_filter_update(float dt)
     float ay = m_data.ay / norm;
     float az = m_data.az / norm;
 
-    // Estimated direction of gravity
+    // Estimated direction of gravity from quaternion
     float half_vx = m_q1 * m_q3 - m_q0 * m_q2;
     float half_vy = m_q0 * m_q1 + m_q2 * m_q3;
     float half_vz = m_q0 * m_q0 - 0.5f + m_q3 * m_q3;
@@ -252,10 +249,16 @@ void IMU::mahony_filter_update(float dt)
     float ey = az * half_vx - ax * half_vz;
     float ez = ax * half_vy - ay * half_vx;
 
-    // Integral feedback
+    // Integral feedback (anti-windup)
     m_ex_int += ex * KI * dt;
     m_ey_int += ey * KI * dt;
     m_ez_int += ez * KI * dt;
+    
+    // Clamp integral terms to prevent windup
+    const float INT_LIMIT = 0.5f;
+    m_ex_int = fmaxf(-INT_LIMIT, fminf(INT_LIMIT, m_ex_int));
+    m_ey_int = fmaxf(-INT_LIMIT, fminf(INT_LIMIT, m_ey_int));
+    m_ez_int = fmaxf(-INT_LIMIT, fminf(INT_LIMIT, m_ez_int));
 
     // Apply proportional and integral feedback
     float gx_c = gx + KP * ex + m_ex_int;
@@ -282,6 +285,8 @@ void IMU::mahony_filter_update(float dt)
     m_q1 /= norm;
     m_q2 /= norm;
     m_q3 /= norm;
+    
+    m_pitch.rate = gy_c;
 }
 
 const Pitch& IMU::get_pitch(float delay_s, FilterType type)
@@ -290,7 +295,7 @@ const Pitch& IMU::get_pitch(float delay_s, FilterType type)
     {
         mahony_filter_update(delay_s);
 
-        // pitch (y-axis rotation)
+        // Calculate pitch (y-axis rotation) from quaternion
         float sinp = 2.0f * (m_q0 * m_q2 - m_q3 * m_q1);
         if (fabsf(sinp) >= 1.0f)
             m_pitch.angle = copysignf(M_PI / 2.0f, sinp);
@@ -299,13 +304,14 @@ const Pitch& IMU::get_pitch(float delay_s, FilterType type)
     }
     else
     {
-        // Complementary filter (legacy)
-        float accel_pitch =
-            atan2f(-m_data.ax, sqrtf(m_data.ay * m_data.ay + m_data.az * m_data.az));
-
+        float accel_pitch = atan2f(-m_data.ax, sqrtf(m_data.ay * m_data.ay + m_data.az * m_data.az));
+        
+        // Integrate gyro
         m_pitch.angle += m_data.gy * delay_s;
+        
+        // Complementary filter fusion
         m_pitch.angle = ALPHA * m_pitch.angle + (1.0f - ALPHA) * accel_pitch;
-        m_pitch.rate = m_data.gy * M_PI / 180.0f;
+        m_pitch.rate = m_data.gy;
     }
 
     return m_pitch;

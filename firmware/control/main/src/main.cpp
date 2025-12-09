@@ -25,7 +25,7 @@ constexpr uint16_t TCP_RX_PORT = 9002;
 constexpr float MAX_TILT_ANGLE = 5.0f;
 constexpr float MAX_TURN = 0.2f;
 
-void status_blink(GyroContext* ctx, uint16_t high, uint16_t low, uint32_t status_bits)
+void status_blink(GyroContext *ctx, uint16_t high, uint16_t low, uint32_t status_bits)
 {
     while (true)
     {
@@ -40,9 +40,9 @@ void status_blink(GyroContext* ctx, uint16_t high, uint16_t low, uint32_t status
     }
 }
 
-void led_wifi_notifier_task(void* args)
+void led_wifi_notifier_task(void *args)
 {
-    GyroContext* ctx = static_cast<GyroContext*>(args);
+    GyroContext *ctx = static_cast<GyroContext *>(args);
     if (ctx == NULL)
     {
         ESP_LOGE("LED_TASK", "NULL context!");
@@ -58,8 +58,8 @@ void led_wifi_notifier_task(void* args)
     while (true)
     {
         bits = xEventGroupWaitBits(ctx->station.get_wifi_event(),
-                                   WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | WIFI_RETRY_BIT,
-                                   pdTRUE, pdFALSE, portMAX_DELAY);
+                                   WIFI_CONNECTED_BIT | WIFI_FAIL_BIT | WIFI_RETRY_BIT, pdTRUE,
+                                   pdFALSE, portMAX_DELAY);
 
         if (bits & WIFI_CONNECTED_BIT)
             gpio_set_level(BLUE_LED_PIN, 1);
@@ -70,9 +70,10 @@ void led_wifi_notifier_task(void* args)
     }
 }
 
-void imu_read_task(void* args)
+void imu_read_task(void *args)
 {
-    GyroContext* ctx = static_cast<GyroContext*>(args);
+    const char *TAG = "IMU_TASK";
+    GyroContext *ctx = static_cast<GyroContext *>(args);
 
     if (ctx == NULL)
     {
@@ -86,23 +87,23 @@ void imu_read_task(void* args)
 
     if (!ctx->is_queue_valid(ctx->imu_queue) || !ctx->is_queue_valid(ctx->imu_motor_queue))
     {
-        ESP_LOGE("IMU_TASK", "FATAL: Invalid queues!");
-        ESP_LOGE("IMU_TASK", "  imu_queue: %p", ctx->imu_queue);
-        ESP_LOGE("IMU_TASK", "  imu_motor_queue: %p", ctx->imu_motor_queue);
+        ESP_LOGE(TAG, "FATAL: Invalid queues!");
+        ESP_LOGE(TAG, "  imu_queue: %p", ctx->imu_queue);
+        ESP_LOGE(TAG, "  imu_motor_queue: %p", ctx->imu_motor_queue);
         vTaskDelete(NULL);
         return;
     }
 
-    ESP_LOGI("IMU_TASK", "Started successfully");
+    ESP_LOGI(TAG, "Started successfully");
 
     const TickType_t sample_period = pdMS_TO_TICKS(30);
     TickType_t last_wake_time = xTaskGetTickCount();
 
     while (true)
     {
-        const IMUData& data = ctx->imu.read_imu_data();
+        const IMUData &data = ctx->imu.read_imu_data();
         TimestampedIMUData ts_data;
-        ts_data.timestamp_ms = (uint32_t)esp_timer_get_time()/1000;
+        ts_data.timestamp_ms = (uint32_t)esp_timer_get_time() / 1000;
         ts_data.ax = data.ax;
         ts_data.ay = data.ay;
         ts_data.az = data.az;
@@ -129,133 +130,167 @@ void imu_read_task(void* args)
         }
         else
         {
-            ESP_LOGE("IMU_TASK", "Motor queue became invalid!");
+            ESP_LOGE(TAG, "Motor queue became invalid!");
         }
 
         vTaskDelayUntil(&last_wake_time, sample_period);
     }
 }
 
-void motor_control_task(void* args)
+void motor_control_task(void *args)
 {
-    GyroContext* ctx = static_cast<GyroContext*>(args);
-    
+    const char *TAG = "MOTOR_TASK";
+    GyroContext *ctx = static_cast<GyroContext *>(args);
+
     if (ctx == NULL)
     {
-        ESP_LOGE("MOTOR_TASK", "FATAL: NULL context!");
+        ESP_LOGE(TAG, "FATAL: NULL context!");
         vTaskDelete(NULL);
         return;
     }
-    
+
     while (!ctx->queues_initialized)
         vTaskDelay(pdMS_TO_TICKS(10));
-    
+
     if (!ctx->is_queue_valid(ctx->motor_queue))
     {
-        ESP_LOGE("MOTOR_TASK", "FATAL: Invalid motor queue!");
+        ESP_LOGE(TAG, "FATAL: Invalid motor queue!");
         vTaskDelete(NULL);
         return;
     }
-    
+
 #if TESTING == 0
     if (!ctx->is_queue_valid(ctx->imu_motor_queue))
     {
-        ESP_LOGE("MOTOR_TASK", "FATAL: Invalid IMU queue!");
+        ESP_LOGE(TAG, "FATAL: Invalid IMU queue!");
         vTaskDelete(NULL);
         return;
     }
 #endif
-    
-    ESP_LOGI("MOTOR_TASK", "Started in %s mode", TESTING ? "TESTING" : "BALANCE");
-    
+
+    ESP_LOGI(TAG, "Started in %s mode", TESTING ? "TESTING" : "BALANCE");
+
 #if TESTING == 0
     float prev_error = 0.0f;
     float integral = 0.0f;
+    float velocity = 0.0f;  // Track robot velocity
     TimestampedIMUData imu_data;
     int64_t prev_timestamp = 0;
 #endif
-    
+
     ControlData control = {0.0f, 0.0f, 0};
-    
+
     while (true)
     {
 #if TESTING == 0
         float Kp = ctx->pid_params.kp;
         float Ki = ctx->pid_params.ki;
         float Kd = ctx->pid_params.kd;
-        
+
         if (!ctx->is_queue_valid(ctx->imu_motor_queue))
         {
-            ESP_LOGE("MOTOR_TASK", "Queue corrupted!");
+            ESP_LOGE(TAG, "Queue corrupted!");
             ctx->motor_driver.set_motor_speeds(0.0f, 0.0f);
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
-        
+
         if (xQueueReceive(ctx->imu_motor_queue, &imu_data, pdMS_TO_TICKS(500)) != pdTRUE)
         {
-            ESP_LOGW("MOTOR_TASK", "IMU timeout - stopping motors");
+            ESP_LOGW(TAG, "IMU timeout - stopping motors");
+            ctx->motor_driver.set_motor_speeds(0.0f, 0.0f);
             prev_error = 0.0f;
             integral = 0.0f;
-            continue;  // Keep looping to prevent watchdog
+            velocity = 0.0f;  // Reset velocity on timeout
+            continue;
         }
-        
+
         if (imu_data.timestamp_ms == prev_timestamp)
             continue;
-        
-        float dt = 0.01f;
+
+        // Calculate dt from timestamps
+        float dt = 0.01f;  // Default 10ms
         if (prev_timestamp != 0)
-            dt = (imu_data.timestamp_ms - prev_timestamp) / 1e3f;
-        dt = fmaxf(0.001f, fminf(dt, 0.05f));
+        {
+            dt = (imu_data.timestamp_ms - prev_timestamp) / 1000.0f;
+            dt = fmaxf(0.001f, fminf(dt, 0.05f));  // Clamp to 1-50ms
+        }
         prev_timestamp = imu_data.timestamp_ms;
-        
-        const Pitch& pitch = ctx->imu.get_pitch(dt, FilterType::COMPLEMENTARY);
-        
+
+        // MAHONY filter for better response
+        const Pitch &pitch = ctx->imu.get_pitch(dt, FilterType::MAHONY);
+
+        float pitch_deg = pitch.angle * 180.0f / M_PI;
+        float pitch_rate_deg = pitch.rate * 180.0f / M_PI;
+
+        // Log pitch in degrees
+        ESP_LOGI(TAG, "Pitch: %.2f deg, Rate: %.2f deg/s, Vel: %.2f", 
+                 pitch_deg, pitch_rate_deg, velocity);
+
+        // Get control input
         if (ctx->is_queue_valid(ctx->motor_queue))
             xQueuePeek(ctx->motor_queue, &control, 0);
+
+        float forward = control.magnitude * cosf(control.angle * M_PI / 180.0f);
+        float turn = control.magnitude * sinf(control.angle * M_PI / 180.0f);
+
+        // FIX: Velocity-based control
+        // Estimate velocity by integrating motor output (or use encoders if available)
+        // For now, we'll use a simple approximation based on pitch angle over time
+        velocity += pitch_deg * dt * 0.5f;  // Approximate velocity accumulation
+        velocity *= 0.95f;  // Add damping to prevent runaway
+
+        // Target pitch based on forward command MINUS velocity compensation
+        float target_pitch = forward * MAX_TILT_ANGLE - velocity * 0.3f;  // Velocity feedback
         
-        float forward = control.magnitude * cos(control.angle * M_PI / 180.0f);
-        float turn = control.magnitude * sin(control.angle * M_PI / 180.0f);
-        float target_pitch = forward * MAX_TILT_ANGLE;
-        
-        float error = target_pitch - pitch.angle;
+        // PID control (now everything is in degrees)
+        float error = target_pitch - pitch_deg;
         integral += error * dt;
-        integral = fmaxf(-0.5f, fminf(0.5f, integral));
+        integral = fmaxf(-10.0f, fminf(10.0f, integral));  // Anti-windup
         float derivative = (error - prev_error) / dt;
         prev_error = error;
-        
-        float balance_output = Kp * error + Ki * integral + Kd * derivative;
-        
+
+        // Add derivative term based on pitch RATE for better damping
+        float balance_output = Kp * error + Ki * integral + Kd * derivative - (pitch_rate_deg * 0.02f);
+
+        // Apply turn and clamp
         float left_speed = balance_output - (turn * MAX_TURN);
         float right_speed = balance_output + (turn * MAX_TURN);
-        
+
         left_speed = fmaxf(-1.0f, fminf(1.0f, left_speed));
         right_speed = fmaxf(-1.0f, fminf(1.0f, right_speed));
-        
+
         ctx->motor_driver.set_motor_speeds(left_speed, right_speed);
-        
+
+        // Debug output
+        if (fabsf(pitch_deg) > 1.0f)  // Only log when tilted
+        {
+            ESP_LOGI(TAG, "Tgt: %.2f, Err: %.2f, Bal: %.2f, L: %.2f, R: %.2f", 
+                     target_pitch, error, balance_output, left_speed, right_speed);
+        }
+
 #else
+        // Testing mode unchanged
         if (xQueueReceive(ctx->motor_queue, &control, pdMS_TO_TICKS(100)) == pdTRUE)
         {
-            float forward = control.magnitude * cos(control.angle * M_PI / 180.0f);
-            float turn = control.magnitude * sin(control.angle * M_PI / 180.0f);
-            
+            float forward = control.magnitude * cosf(control.angle * M_PI / 180.0f);
+            float turn = control.magnitude * sinf(control.angle * M_PI / 180.0f);
+
             float left_speed = forward - turn;
             float right_speed = forward + turn;
-            
+
             left_speed = fmaxf(-1.0f, fminf(1.0f, left_speed));
             right_speed = fmaxf(-1.0f, fminf(1.0f, right_speed));
-            
+
             ctx->motor_driver.set_motor_speeds(left_speed, right_speed);
         }
 #endif
         taskYIELD();
     }
 }
-
-void servo_control_task(void* args)
+void servo_control_task(void *args)
 {
-    GyroContext* ctx = static_cast<GyroContext*>(args);
+    GyroContext *ctx = static_cast<GyroContext *>(args);
 
     if (ctx == NULL)
     {
@@ -306,13 +341,14 @@ void servo_control_task(void* args)
     }
 }
 
-void ultrasound_read_task(void* args)
+void ultrasound_read_task(void *args)
 {
-    GyroContext* ctx = static_cast<GyroContext*>(args);
+    const char *TAG = "US_TASK";
+    GyroContext *ctx = static_cast<GyroContext *>(args);
 
     if (ctx == NULL)
     {
-        ESP_LOGE("US_TASK", "FATAL: NULL context!");
+        ESP_LOGE(TAG, "FATAL: NULL context!");
         vTaskDelete(NULL);
         return;
     }
@@ -328,12 +364,12 @@ void ultrasound_read_task(void* args)
 
     if (!ctx->is_queue_valid(ctx->ultrasound_queue))
     {
-        ESP_LOGE("US_TASK", "FATAL: Invalid queue!");
+        ESP_LOGE(TAG, "FATAL: Invalid queue!");
         vTaskDelete(NULL);
         return;
     }
 
-    ESP_LOGI("US_TASK", "Started successfully");
+    ESP_LOGI(TAG, "Started successfully");
 
     ctx->ultrasound.init();
     vTaskDelay(pdMS_TO_TICKS(750));
@@ -345,12 +381,12 @@ void ultrasound_read_task(void* args)
 
         if (ts_data.distance_cm < 0)
         {
-            ESP_LOGW("US_TASK", "Measurement error");
+            ESP_LOGW(TAG, "Measurement error");
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
 
-        ts_data.timestamp_ms = (uint32_t)esp_timer_get_time()/1000;
+        ts_data.timestamp_ms = (uint32_t)esp_timer_get_time() / 1000;
 
         // Safe send with validation
         if (ctx->is_queue_valid(ctx->ultrasound_queue))
@@ -368,18 +404,19 @@ void ultrasound_read_task(void* args)
         // gpio_set_level(CAM_TRIG_PIN, 1);
         // vTaskDelay(pdMS_TO_TICKS(10));
         // gpio_set_level(CAM_TRIG_PIN, 0);
-    
+
         vTaskDelay(pdMS_TO_TICKS(90));
     }
 }
 
-void udp_tx_task(void* args)
+void udp_tx_task(void *args)
 {
-    GyroContext* ctx = static_cast<GyroContext*>(args);
+    const char *TAG = "UDP_TX_TASK";
+    GyroContext *ctx = static_cast<GyroContext *>(args);
 
     if (ctx == NULL)
     {
-        ESP_LOGE("UDP_TX_TASK", "FATAL: NULL context!");
+        ESP_LOGE(TAG, "FATAL: NULL context!");
         vTaskDelete(NULL);
         return;
     }
@@ -392,7 +429,7 @@ void udp_tx_task(void* args)
 
     ctx->station.wait_for_wifi();
 
-    ESP_LOGI("UDP_TX_TASK", "Starting...");
+    ESP_LOGI(TAG, "Starting...");
 
     UDPClient udp_tx(UDPMode::TRANSMITTER, ctx->dest_ip, UDP_TX_PORT);
 
@@ -452,7 +489,7 @@ void udp_tx_task(void* args)
             int sent = udp_tx.send_data(buffer, offset);
             if (sent <= 0)
             {
-                ESP_LOGW("UDP_TX_TASK", "Send failed: %d", sent);
+                ESP_LOGW(TAG, "Send failed: %d", sent);
             }
         }
 
@@ -460,13 +497,14 @@ void udp_tx_task(void* args)
     }
 }
 
-void udp_rx_task(void* args)
+void udp_rx_task(void *args)
 {
-    GyroContext* ctx = static_cast<GyroContext*>(args);
+    const char *TAG = "UDP_RX_TASK";
+    GyroContext *ctx = static_cast<GyroContext *>(args);
 
     if (ctx == NULL)
     {
-        ESP_LOGE("UDP_RX_TASK", "FATAL: NULL context!");
+        ESP_LOGE(TAG, "FATAL: NULL context!");
         vTaskDelete(NULL);
         return;
     }
@@ -476,14 +514,14 @@ void udp_rx_task(void* args)
 
     ctx->station.wait_for_wifi();
 
-    ESP_LOGI("UDP_RX_TASK", "Starting...");
+    ESP_LOGI(TAG, "Starting...");
 
     UDPClient udp_receiver(UDPMode::RECEIVER, UDP_RX_PORT, 4096);
 
     int err = udp_receiver.start();
     if (err != 0)
     {
-        ESP_LOGE("UDP_RX_TASK", "Failed to start: %d", err);
+        ESP_LOGE(TAG, "Failed to start: %d", err);
         vTaskDelete(NULL);
         return;
     }
@@ -499,8 +537,8 @@ void udp_rx_task(void* args)
         if (ret == sizeof(ControlData))
         {
             memcpy(&control, buffer, sizeof(ControlData));
-            ESP_LOGI("UDP_RX", "Control: mag=%.2f, ang=%.1f, servo=%d", control.magnitude,
-                     control.angle, control.servo_angle);
+            ESP_LOGI(TAG, "Control: mag=%.2f, ang=%.1f, servo=%d", control.magnitude, control.angle,
+                     control.servo_angle);
 
             // Safe overwrite with validation
             if (ctx->is_queue_valid(ctx->motor_queue))
@@ -519,37 +557,38 @@ void udp_rx_task(void* args)
         }
         else if (ret < 0)
         {
-            ESP_LOGW("UDP_RX", "Receive error: %d", ret);
+            ESP_LOGW(TAG, "Receive error: %d", ret);
             vTaskDelay(pdMS_TO_TICKS(100));
         }
         else if (ret > 0)
         {
-            ESP_LOGW("UDP_RX", "Unexpected size: %d", ret);
+            ESP_LOGW(TAG, "Unexpected size: %d", ret);
         }
     }
 }
 
-void tcp_rx_task(void* args)
+void tcp_rx_task(void *args)
 {
-    GyroContext* ctx = static_cast<GyroContext*>(args);
+    const char *TAG = "TCP_RX_TASK";
+    GyroContext *ctx = static_cast<GyroContext *>(args);
 
     ctx->station.wait_for_wifi();
 
     while (true)
     {
-        ESP_LOGI("TCP_RX_TASK", "Starting TCP server on port %d...", TCP_RX_PORT);
+        ESP_LOGI(TAG, "Starting TCP server on port %d...", TCP_RX_PORT);
 
         TCPClient tcp_receiver(TCPMode::RECEIVER, TCP_RX_PORT, 128);
         int err = tcp_receiver.start();
 
         if (err != 0)
         {
-            ESP_LOGE("TCP_RX_TASK", "Failed to start TCP server: %d", err);
+            ESP_LOGE(TAG, "Failed to start TCP server: %d", err);
             vTaskDelay(pdMS_TO_TICKS(5000));
             continue;
         }
 
-        ESP_LOGI("TCP_RX_TASK", "TCP server ready, waiting for client...");
+        ESP_LOGI(TAG, "TCP server ready, waiting for client...");
 
         uint8_t buffer[128] = {0};
         int expected_size = sizeof(PIDParams) + 32 + 64;  // 108 bytes
@@ -568,7 +607,7 @@ void tcp_rx_task(void* args)
                 memcpy(ssid, buffer + sizeof(PIDParams), 32);
                 memcpy(passwd, buffer + sizeof(PIDParams) + 32, 64);
 
-                ESP_LOGI("TCP_RX_TASK", "Received PID: kp=%.2f, ki=%.2f, kd=%.2f | Wi-Fi: %s, Passwd: %s",
+                ESP_LOGI(TAG, "Received PID: kp=%.2f, ki=%.2f, kd=%.2f | Wi-Fi: %s, Passwd: %s",
                          ctx->pid_params.kp, ctx->pid_params.ki, ctx->pid_params.kd, ssid, passwd);
 
                 ctx->save_pid_to_nvs();
@@ -582,30 +621,29 @@ void tcp_rx_task(void* args)
             }
             else if (ret < 0)
             {
-                ESP_LOGW("TCP_RX_TASK", "Receive failed (%d), connection lost", ret);
+                ESP_LOGW(TAG, "Receive failed (%d), connection lost", ret);
                 break;
             }
             else if (ret > 0)
             {
-                ESP_LOGW("TCP_RX_TASK", "Unexpected size: %d (expected %d)", ret, expected_size);
+                ESP_LOGW(TAG, "Unexpected size: %d (expected %d)", ret, expected_size);
             }
 
             vTaskDelay(pdMS_TO_TICKS(100));
         }
 
         tcp_receiver.end();
-        ESP_LOGI("TCP_RX_TASK", "Connection closed, restarting server...");
+        ESP_LOGI(TAG, "Connection closed, restarting server...");
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
 extern "C" void app_main(void)
 {
-    esp_log_level_set("*", ESP_LOG_VERBOSE);
     initialize_nvs();
 
     // Create context with all queues
-    GyroContext* ctx = new GyroContext();
+    GyroContext *ctx = new GyroContext();
 
     // Verify queues before starting tasks
     if (!ctx->queues_initialized)
@@ -616,13 +654,11 @@ extern "C" void app_main(void)
 
     ESP_LOGI("MAIN", "Starting tasks...");
 
-    // Start local tasks first (don't need WiFi)
     xTaskCreatePinnedToCore(imu_read_task, "IMU_READ", 3072, ctx, 6, NULL, 1);
     xTaskCreatePinnedToCore(motor_control_task, "MOTOR_CONTROL", 3072, ctx, 6, NULL, 0);
     xTaskCreatePinnedToCore(servo_control_task, "SERVO_CONTROL", 2048, ctx, 4, NULL, 1);
     xTaskCreatePinnedToCore(led_wifi_notifier_task, "LED_NOTIFIER", 1024, ctx, 1, NULL, 1);
 
-    // Wait for WiFi before starting network tasks
     ESP_LOGI("MAIN", "Waiting for WiFi...");
     ctx->station.wait_for_wifi();
     ctx->station.get_broadcast_ip(ctx->dest_ip, sizeof(ctx->dest_ip));
