@@ -44,24 +44,18 @@ The mobile app provides manual control and monitoring capabilities for the robot
 
 Control Command Packet:
 ```python
-struct.pack('Bhhh', 
-    packet_type,      # 1 byte
-    left_motor,       # 2 bytes (signed)
-    right_motor,      # 2 bytes (signed)
-    servo_angle       # 2 bytes (signed)
+struct.pack('ffi', 
+    magnitude,
+    angle
 )
 ```
 
 Sensor Data Packet (received):
 ```python
-struct.unpack('Bffffhh',
-    packet_type,      # Command type
-    pitch,            # IMU pitch angle
-    roll,             # IMU roll angle  
-    yaw,              # IMU yaw angle
-    distance,         # Ultrasonic reading
-    battery,          # Battery voltage
-    status            # Status flags
+struct.pack('<I6f',
+    timestamp,
+    ax, ay, az,
+    gx, gy, gz
 )
 ```
 
@@ -145,33 +139,6 @@ right_motor = forward_speed + turn_rate
 
 **Visual**: Triangle-shaped button pointing direction
 **Interaction**: Touch and hold for continuous movement
-
-## User Interface
-
-### Main Screen Layout
-
-```
-┌─────────────────────────────┐
-│        App Title            │
-│      [Settings] [Mode]      │
-├─────────────────────────────┤
-│                             │
-│   [Video Feed Area]         │
-│   (if enabled)              │
-│                             │
-├─────────────────────────────┤
-│  Pitch: XX°  Distance: XXcm │
-│  Battery: X.XV              │
-├─────────────────────────────┤
-│                             │
-│         [Joystick]          │
-│            (○)              │
-│                             │
-├─────────────────────────────┤
-│  Camera Control             │
-│    ▲  [Slider]  ▼          │
-└─────────────────────────────┘
-```
 
 ### Control Flow
 

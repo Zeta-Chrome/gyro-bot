@@ -98,7 +98,6 @@ pip install ultralytics opencv-python numpy torch matplotlib
 Edit `config.py`:
 
 ```python
-ROBOT_IP = "192.168.1.100"  # ESP32 IP (check serial monitor)
 UDP_CONTROL_PORT = 5000
 UDP_TELEMETRY_PORT = 5001
 TCP_VIDEO_PORT = 5002
