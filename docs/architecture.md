@@ -1,3 +1,4 @@
+```mermaid
 graph TB
     subgraph Power["⚡ POWER SYSTEM"]
         Battery["LiPo 3S Battery<br/>11.6V • 2200mAh"]
@@ -63,3 +64,4 @@ graph TB
     class MPU6050,HCSR04 sensorStyle
     class ESP32CAM,Servo visionStyle
     class Driver,MotorL,MotorR motionStyle
+```
