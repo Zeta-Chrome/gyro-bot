@@ -111,6 +111,9 @@ void imu_read_task(void *args)
         ts_data.gy = data.gy;
         ts_data.gz = data.gz;
 
+        ESP_LOGI(TAG, "ax:%f, ay:%f, az:%f, gx:%f, gy:%f, gz:%f", data.ax, data.ay, data.az,
+                 data.gx, data.gy, data.gz);
+
         if (ctx->is_queue_valid(ctx->imu_queue))
         {
             if (xQueueSend(ctx->imu_queue, &ts_data, 0) != pdTRUE)
@@ -223,10 +226,6 @@ void motor_control_task(void *args)
         float pitch_deg = pitch.angle * 180.0f / M_PI;
         float pitch_rate_deg = pitch.rate * 180.0f / M_PI;
 
-        // Log pitch in degrees
-        ESP_LOGI(TAG, "Pitch: %.2f deg, Rate: %.2f deg/s, Vel: %.2f", 
-                 pitch_deg, pitch_rate_deg, velocity);
-
         // Get control input
         if (ctx->is_queue_valid(ctx->motor_queue))
             xQueuePeek(ctx->motor_queue, &control, 0);
@@ -238,11 +237,11 @@ void motor_control_task(void *args)
         // Estimate velocity by integrating motor output (or use encoders if available)
         // For now, we'll use a simple approximation based on pitch angle over time
         velocity += pitch_deg * dt * 0.5f;  // Approximate velocity accumulation
-        velocity *= 0.95f;  // Add damping to prevent runaway
+        velocity *= 0.95f;                  // Add damping to prevent runaway
 
         // Target pitch based on forward command MINUS velocity compensation
         float target_pitch = forward * MAX_TILT_ANGLE - velocity * 0.3f;  // Velocity feedback
-        
+
         // PID control (now everything is in degrees)
         float error = target_pitch - pitch_deg;
         integral += error * dt;
@@ -251,7 +250,8 @@ void motor_control_task(void *args)
         prev_error = error;
 
         // Add derivative term based on pitch RATE for better damping
-        float balance_output = Kp * error + Ki * integral + Kd * derivative - (pitch_rate_deg * 0.02f);
+        float balance_output =
+                Kp * error + Ki * integral + Kd * derivative - (pitch_rate_deg * 0.02f);
 
         // Apply turn and clamp
         float left_speed = balance_output - (turn * MAX_TURN);
@@ -260,15 +260,7 @@ void motor_control_task(void *args)
         left_speed = fmaxf(-1.0f, fminf(1.0f, left_speed));
         right_speed = fmaxf(-1.0f, fminf(1.0f, right_speed));
 
-        ctx->motor_driver.set_motor_speeds(left_speed, right_speed);
-
-        // Debug output
-        if (fabsf(pitch_deg) > 1.0f)  // Only log when tilted
-        {
-            ESP_LOGI(TAG, "Tgt: %.2f, Err: %.2f, Bal: %.2f, L: %.2f, R: %.2f", 
-                     target_pitch, error, balance_output, left_speed, right_speed);
-        }
-
+        // ctx->motor_driver.set_motor_speeds(left_speed, right_speed);
 #else
         // Testing mode unchanged
         if (xQueueReceive(ctx->motor_queue, &control, pdMS_TO_TICKS(100)) == pdTRUE)
@@ -288,6 +280,7 @@ void motor_control_task(void *args)
         taskYIELD();
     }
 }
+
 void servo_control_task(void *args)
 {
     GyroContext *ctx = static_cast<GyroContext *>(args);
@@ -353,11 +346,6 @@ void ultrasound_read_task(void *args)
         return;
     }
 
-    // // camera trigger gpio setup
-    // gpio_reset_pin(CAM_TRIG_PIN);
-    // gpio_set_direction(CAM_TRIG_PIN, GPIO_MODE_OUTPUT);
-    // gpio_set_level(CAM_TRIG_PIN, 0);
-
     // Wait for queues
     while (!ctx->queues_initialized)
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -401,10 +389,6 @@ void ultrasound_read_task(void *args)
             }
         }
 
-        // gpio_set_level(CAM_TRIG_PIN, 1);
-        // vTaskDelay(pdMS_TO_TICKS(10));
-        // gpio_set_level(CAM_TRIG_PIN, 0);
-
         vTaskDelay(pdMS_TO_TICKS(90));
     }
 }
@@ -421,7 +405,6 @@ void udp_tx_task(void *args)
         return;
     }
 
-    // Wait for queues AND WiFi
     while (!ctx->queues_initialized)
     {
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -430,13 +413,17 @@ void udp_tx_task(void *args)
     ctx->station.wait_for_wifi();
 
     ESP_LOGI(TAG, "Starting...");
+    
+    // ADD THIS: Verify struct sizes
+    ESP_LOGI(TAG, "sizeof(TimestampedIMUData)=%d (expected 28)", sizeof(TimestampedIMUData));
+    ESP_LOGI(TAG, "sizeof(TimestampedUltrasound)=%d (expected 8)", sizeof(TimestampedUltrasound));
 
     UDPClient udp_tx(UDPMode::TRANSMITTER, ctx->dest_ip, UDP_TX_PORT);
 
     int err = udp_tx.start();
     if (err != 0)
     {
-        ESP_LOGE("UDP_TX_TASK", "Failed to start: %d", err);
+        ESP_LOGE(TAG, "Failed to start: %d", err);
         vTaskDelete(NULL);
         return;
     }
@@ -451,7 +438,6 @@ void udp_tx_task(void *args)
     {
         int imu_count = 0;
 
-        // Safe batch receive
         if (ctx->is_queue_valid(ctx->imu_queue))
         {
             while (xQueueReceive(ctx->imu_queue, &imu_batch[imu_count], 0) == pdTRUE
@@ -486,6 +472,17 @@ void udp_tx_task(void *args)
             memcpy(buffer + offset, us_batch, us_count * sizeof(TimestampedUltrasound));
             offset += us_count * sizeof(TimestampedUltrasound);
 
+            // ADD THIS: Debug first packet
+            static bool first_packet = true;
+            if (first_packet && imu_count > 0) {
+                ESP_LOGI(TAG, "First packet: imu_count=%d, us_count=%d, total_bytes=%d", 
+                         imu_count, us_count, offset);
+                ESP_LOGI(TAG, "First IMU: ts=%u, ax=%.6f, ay=%.6f, az=%.6f",
+                         imu_batch[0].timestamp_ms, imu_batch[0].ax, 
+                         imu_batch[0].ay, imu_batch[0].az);
+                first_packet = false;
+            }
+
             int sent = udp_tx.send_data(buffer, offset);
             if (sent <= 0)
             {
@@ -496,7 +493,6 @@ void udp_tx_task(void *args)
         vTaskDelayUntil(&last_wake_time, send_period);
     }
 }
-
 void udp_rx_task(void *args)
 {
     const char *TAG = "UDP_RX_TASK";

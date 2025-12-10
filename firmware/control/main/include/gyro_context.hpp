@@ -7,14 +7,14 @@
 #include <freertos/FreeRTOS.h>
 #include <esp_log.h>
 
-struct TimestampedIMUData
+struct __attribute__((packed)) TimestampedIMUData
 {
     uint32_t timestamp_ms;
     float ax, ay, az;
     float gx, gy, gz;
 };
 
-struct TimestampedUltrasound
+struct __attribute__((packed)) TimestampedUltrasound
 {
     uint32_t timestamp_ms;
     float distance_cm;

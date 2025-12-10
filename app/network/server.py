@@ -79,41 +79,53 @@ class MultiPortServer:
 
             offset = 0
 
-            # Read IMU count
+            # Read IMU count (1 byte)
             if len(data) < 1:
                 return
             imu_count = data[offset]
             offset += 1
 
+            print(f"[IMU] Received {len(data)} bytes, {imu_count} IMU samples")
+
             # Process IMU samples
-            imu_size = 8 + 6 * 4  # int64 + 6 floats = 32 bytes
+            # uint32_t (4 bytes) + 6 floats (24 bytes) = 28 bytes per sample
+            imu_size = 28 
+            
             for i in range(imu_count):
                 if offset + imu_size > len(data):
+                    print(f"[IMU] Warning: Not enough data for sample {i}")
                     break
 
-                timestamp_us, ax, ay, az, gx, gy, gz = struct.unpack_from(
+                timestamp_ms, ax, ay, az, gx, gy, gz = struct.unpack_from(
                     "<I6f", data, offset
                 )
                 offset += imu_size
-
-                # Calculate pitch
-                pitch = math.degrees(math.atan2(ax, math.sqrt(ay * ay + az * az)))
+                
+                pitch = math.degrees(math.atan2(-ax, math.sqrt(ay * ay + az * az)))
+                print(f"[IMU {i}] Pitch: {pitch:.2f}°")
                 self.latest_pitch = pitch
 
-            # Read ultrasound count
+            # Read ultrasound count (1 byte)
             if offset >= len(data):
                 return
             us_count = data[offset]
             offset += 1
 
+            print(f"[US] {us_count} ultrasound samples")
+
             # Process ultrasound samples
-            us_size = 8 + 4  # int64 + float = 12 bytes
+            # uint32_t (4 bytes) + float (4 bytes) = 8 bytes per sample
+            us_size = 8  # FIX: Was incorrectly 12
+            
             for i in range(us_count):
                 if offset + us_size > len(data):
+                    print(f"[US] Warning: Not enough data for sample {i}")
                     break
 
-                timestamp_us, distance_cm = struct.unpack_from("<If", data, offset)
-                offset += us_size
+                timestamp_ms, distance_cm = struct.unpack_from("<If", data, offset)
+                offset += us_size  # FIX: Now correctly adds 8 bytes
+                
+                print(f"[US {i}] ts={timestamp_ms} | distance: {distance_cm:.2f} cm")
                 self.latest_distance = distance_cm
 
             # Update UI
@@ -131,6 +143,9 @@ class MultiPortServer:
 
         except Exception as e:
             print(f"[IMU] Error parsing data: {e}")
+            import traceback
+            traceback.print_exc()
+            print(f"[IMU] Raw data ({len(data)} bytes): {data[:60].hex()}")
 
     def handle_camera_udp(self, data, addr, cam_id):
         """Handle JPEG camera data via UDP"""
