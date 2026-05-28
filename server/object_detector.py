@@ -1,106 +1,209 @@
 """
-YOLO-based object detection for navigation
+High-performance object detection using YOLOv8
 """
 import cv2
 import numpy as np
+from collections import defaultdict, deque
+import time
 from ultralytics import YOLO
 import config
 
 
 class ObjectDetector:
     def __init__(self):
-        print("[DETECTOR] Loading YOLO model...")
-        self.model = YOLO(config.YOLO_MODEL)
-        print("[DETECTOR] Model loaded")
+        print("[DETECTOR] Loading YOLOv8 model...")
+        # Use YOLOv8s (small) for better accuracy than nano
+        self.model = YOLO('yolov8s.pt')
+        self.model.fuse()  # Optimize model
         
-        # Detection results
-        self.detections = []
-        self.annotated_frame = None
+        # Detection history
+        self.object_counts = defaultdict(int)
+        self.object_history = deque(maxlen=100)
+        self.total_detections = 0
+        
+        # Performance tracking
+        self.fps_history = deque(maxlen=30)
+        self.last_time = time.time()
+        
+        print("[DETECTOR] Model loaded successfully")
         
     def detect(self, frame):
-        """Run object detection on frame"""
-        if frame is None:
-            return []
-            
-        # Run inference
-        results = self.model(frame, conf=config.DETECTION_CONFIDENCE, verbose=False)
-        
-        self.detections = []
-        self.annotated_frame = frame.copy()
-        
-        if len(results) > 0:
-            result = results[0]
-            
-            # Process detections
-            if result.boxes is not None:
-                boxes = result.boxes.xyxy.cpu().numpy()
-                confidences = result.boxes.conf.cpu().numpy()
-                class_ids = result.boxes.cls.cpu().numpy().astype(int)
-                
-                for box, conf, cls_id in zip(boxes, confidences, class_ids):
-                    x1, y1, x2, y2 = box
-                    
-                    detection = {
-                        'bbox': [int(x1), int(y1), int(x2), int(y2)],
-                        'confidence': float(conf),
-                        'class_id': int(cls_id),
-                        'class_name': self.model.names[cls_id],
-                        'center_x': int((x1 + x2) / 2),
-                        'center_y': int((y1 + y2) / 2),
-                        'width': int(x2 - x1),
-                        'height': int(y2 - y1)
-                    }
-                    
-                    self.detections.append(detection)
-                    
-                    # Draw on frame
-                    color = self._get_color(cls_id)
-                    cv2.rectangle(self.annotated_frame, 
-                                (int(x1), int(y1)), (int(x2), int(y2)), 
-                                color, 2)
-                    
-                    # Label
-                    label = f"{detection['class_name']} {conf:.2f}"
-                    cv2.putText(self.annotated_frame, label, 
-                              (int(x1), int(y1) - 10),
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                              
-        return self.detections
-        
-    def get_annotated_frame(self):
-        """Get frame with detection boxes drawn"""
-        return self.annotated_frame
-        
-    def get_obstacles_in_path(self, frame_width, threshold_y=0.7):
         """
-        Get obstacles in the robot's path (bottom portion of frame)
-        
-        Args:
-            frame_width: Width of the frame
-            threshold_y: Consider obstacles in bottom threshold_y of frame
+        Perform object detection on frame
+        Returns: annotated frame, detections list
         """
-        obstacles = []
+        start_time = time.time()
         
-        for det in self.detections:
-            bbox = det['bbox']
-            center_y = det['center_y']
+        # Frame comes in as RGB, convert to BGR for YOLO
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        
+        # Run inference with lower confidence for better detection
+        results = self.model.predict(
+            frame_bgr,
+            conf=0.25,  # Lower confidence threshold
+            iou=0.45,   # NMS threshold
+            verbose=False,
+            device='cpu',
+            half=False,  # No FP16 on CPU
+            imgsz=320    # Match input size
+        )[0]
+        
+        # Process detections
+        detections = []
+        annotated_frame = frame_bgr.copy()
+        
+        if results.boxes is not None and len(results.boxes) > 0:
+            boxes = results.boxes.xyxy.cpu().numpy()
+            scores = results.boxes.conf.cpu().numpy()
+            classes = results.boxes.cls.cpu().numpy().astype(int)
             
-            # Check if obstacle is in bottom portion (closer to robot)
-            if center_y > frame_width * threshold_y:
-                # Calculate angular position relative to center
-                frame_center = frame_width / 2
-                angle_offset = (det['center_x'] - frame_center) / frame_center * 45  # +/- 45 degrees
+            for box, score, cls in zip(boxes, scores, classes):
+                x1, y1, x2, y2 = box.astype(int)
+                class_name = results.names[cls]
                 
-                obstacles.append({
-                    'class': det['class_name'],
-                    'angle': angle_offset,
-                    'size': det['width'] * det['height'],
-                    'confidence': det['confidence']
-                })
+                # Update counts
+                self.object_counts[class_name] += 1
+                self.total_detections += 1
                 
-        return obstacles
+                detection_info = {
+                    'class': class_name,
+                    'confidence': float(score),
+                    'bbox': [int(x1), int(y1), int(x2), int(y2)],
+                    'timestamp': time.time()
+                }
+                detections.append(detection_info)
+                
+                # Draw bounding box with thicker lines
+                color = self._get_class_color(cls)
+                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 3)
+                
+                # Draw label with background
+                label = f"{class_name}: {score:.2f}"
+                label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                cv2.rectangle(
+                    annotated_frame,
+                    (x1, y1 - label_size[1] - 10),
+                    (x1 + label_size[0] + 5, y1),
+                    color,
+                    -1
+                )
+                cv2.putText(
+                    annotated_frame,
+                    label,
+                    (x1 + 2, y1 - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 255),
+                    2
+                )
         
-    def _get_color(self, class_id):
-        """Get consistent color for class"""
-        np.random.seed(class_id)
-        return tuple(map(int, np.random.randint(0, 255, 3)))
+        # Store in history
+        self.object_history.append({
+            'timestamp': time.time(),
+            'detections': detections,
+            'count': len(detections)
+        })
+        
+        # Convert back to RGB for display
+        annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+        
+        # Calculate FPS
+        elapsed = time.time() - start_time
+        fps = 1.0 / elapsed if elapsed > 0 else 0
+        self.fps_history.append(fps)
+        
+        return annotated_frame, detections
+    
+    def create_summary_image(self, frame, detections):
+        """
+        Create a beautiful summary image with detection stats
+        Frame is already in RGB format
+        """
+        # Frame is RGB, convert to BGR for OpenCV operations
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        
+        # Resize frame to output size
+        output = cv2.resize(frame_bgr, (config.OUTPUT_WIDTH, config.OUTPUT_HEIGHT))
+        h, w = output.shape[:2]
+        
+        # Create stats panel at bottom
+        panel_height = 150
+        panel = np.ones((panel_height, w, 3), dtype=np.uint8) * 40
+        
+        # Add stats
+        y_offset = 30
+        avg_fps = np.mean(self.fps_history) if len(self.fps_history) > 0 else 0
+        
+        stats_lines = [
+            f"FPS: {avg_fps:.1f}",
+            f"Current Detections: {len(detections)}",
+            f"Total Objects Detected: {self.total_detections}",
+            f"Unique Classes: {len(self.object_counts)}"
+        ]
+        
+        for i, line in enumerate(stats_lines):
+            cv2.putText(
+                panel,
+                line,
+                (20, y_offset + i * 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                2
+            )
+        
+        # Add object counts
+        x_offset = w // 2
+        cv2.putText(
+            panel,
+            "Object Counts:",
+            (x_offset, y_offset),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 255),
+            2
+        )
+        
+        # Top 5 detected objects
+        sorted_objects = sorted(
+            self.object_counts.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:5]
+        
+        for i, (obj, count) in enumerate(sorted_objects):
+            cv2.putText(
+                panel,
+                f"{obj}: {count}",
+                (x_offset, y_offset + 30 + i * 25),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                1
+            )
+        
+        # Combine
+        result = np.vstack([output, panel])
+        
+        return result
+    
+    def _get_class_color(self, cls):
+        """Get consistent color for each class"""
+        np.random.seed(cls)
+        color = tuple(map(int, np.random.randint(0, 255, 3)))
+        return color
+    
+    def get_stats(self):
+        """Get detection statistics"""
+        return {
+            'total_detections': self.total_detections,
+            'object_counts': dict(self.object_counts),
+            'unique_classes': len(self.object_counts),
+            'avg_fps': np.mean(self.fps_history) if len(self.fps_history) > 0 else 0
+        }
+    
+    def reset_counts(self):
+        """Reset detection counts"""
+        self.object_counts.clear()
+        self.total_detections = 0
+        print("[DETECTOR] Counts reset")

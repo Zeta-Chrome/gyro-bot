@@ -1,45 +1,39 @@
 """
-Configuration file for autonomous navigation system
+Configuration settings for robot server
 """
 
-# Network Configuration
-UDP_IMU_PORT = 9001
-TCP_CAMERA_PORT = 9006  # Using camera 2 since it's the working one
-DISCOVERY_PORT = 9009
-UDP_CONTROL_PORT = 9000
+# Network ports
+UDP_IMU_PORT = 9001          # Receive IMU/ultrasound from ESP32
+UDP_CONTROL_PORT = 9000      # Send control to ESP32
+UDP_MODE_PORT = 9010         # Receive mode from mobile app
+TCP_CAMERA_PORT = 9006       # Receive camera from ESP32
+TCP_OUTPUT_PORT = 9011       # Send processed images to mobile app
+DISCOVERY_PORT = 9009        # Discovery broadcast
 
-# Sensor Configuration
-IMU_SAMPLE_RATE = 100  # Hz
-ULTRASOUND_MAX_RANGE = 400  # cm
-ULTRASOUND_MIN_RANGE = 2    # cm
-ULTRASOUND_TIMEOUT = 1.0    # seconds
+# Camera settings
+CAMERA_WIDTH = 320
+CAMERA_HEIGHT = 240
+OUTPUT_WIDTH = 640
+OUTPUT_HEIGHT = 480
 
-# Object Detection
-YOLO_MODEL = "yolov8n.pt"  # Nano model for speed
-DETECTION_CONFIDENCE = 0.5
-DETECTION_SIZE = 640
+# Object detection settings
+DETECTION_CONFIDENCE = 0.45
+DETECTION_NMS_THRESHOLD = 0.4
+DETECTION_MODEL = 'yolov8n'  # nano model for speed
 
-# Navigation Parameters
-SAFE_DISTANCE = 50.0        # cm - stop distance
-SLOW_DISTANCE = 100.0       # cm - slow down distance
-MAX_SPEED = 1.0             # magnitude (0-1)
-MIN_SPEED = 0.3
-TURN_RATE = 45.0            # degrees per second
+# Path mapping settings
+MAP_SIZE = 800  # pixels
+MAP_SCALE = 50  # pixels per meter
+MAX_DISTANCE = 5.0  # meters
+PATH_COLOR = (0, 0, 0)  # black
+ROBOT_COLOR = (0, 255, 0)  # green
+OBSTACLE_NEAR_COLOR = (0, 0, 255)  # red
+OBSTACLE_FAR_COLOR = (255, 0, 0)  # blue
 
-# Path Planning
-GRID_CELL_SIZE = 20         # cm
-EXPLORATION_TIMEOUT = 300   # seconds
-OBSTACLE_PADDING = 30       # cm
+# Buffer settings
+IMU_BUFFER_SIZE = 100
+ULTRASOUND_BUFFER_SIZE = 50
+POSITION_BUFFER_SIZE = 1000
 
-# Display
-DISPLAY_WIDTH = 1280
-DISPLAY_HEIGHT = 720
-FPS_UPDATE_INTERVAL = 30
-
-# Kalman Filter Parameters
-IMU_PROCESS_NOISE = 0.01
-IMU_MEASUREMENT_NOISE = 0.1
-
-# Control Output
-SERVO_CENTER = 90
-SERVO_RANGE = 45  # +/- degrees from center
+# JPEG quality
+JPEG_QUALITY = 85

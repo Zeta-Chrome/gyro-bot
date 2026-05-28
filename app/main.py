@@ -20,11 +20,11 @@ class GyroControllerApp(App):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.current_mode = "Dual View"
+        self.current_mode = "Object detection"
         self.current_info = "Joystick"
         self.server = MultiPortServer(self)
         self._last_control_send = 0
-        self._control_interval = 0.05  # 20 Hz (less aggressive)
+        self._control_interval = 0.05  # 20 Hz
         self._last_servo_value = 0
         self.esp32_ip = None  # Will be auto-detected
 
@@ -38,8 +38,8 @@ class GyroControllerApp(App):
 
         # Mode dropdown
         self.mode_dropdown = DropdownWidget(
-            header_text="Mode : Dual View",
-            options=["Dual View", "Object Detection", "3D Mapping"],
+            header_text="Mode : Object detection",
+            options=["Object detection", "2D Path Mapping"],
             size_hint=(0.33, 1),
         )
         self.mode_dropdown.on_select = self.on_mode_select
@@ -64,21 +64,13 @@ class GyroControllerApp(App):
 
         root.add_widget(top_bar)
 
-        # Camera displays
-        self.cam1 = Image(
-            color=(0, 0, 0, 1), size_hint=(0.5, 1), pos_hint={"x": 0, "y": 0}
-        )
-        self.cam2 = Image(
-            color=(0, 0, 0, 1), size_hint=(0.5, 1), pos_hint={"x": 0.5, "y": 0}
-        )
+        # Single camera display (processed image only)
         self.proc_image = Image(
-            color=(0, 0, 0, 1), size_hint=(1, 1), pos_hint={"x": 0, "y": 0}
+            color=(0, 0, 0, 1), 
+            size_hint=(1, 1), 
+            pos_hint={"x": 0, "y": 0}
         )
-        bottom_area.add_widget(self.cam1)
-        bottom_area.add_widget(self.cam2)
         bottom_area.add_widget(self.proc_image)
-
-        self.on_mode_select(self.mode_dropdown, self.current_mode)
 
         # Joystick
         self.joystick = JoystickWidget(
@@ -108,18 +100,20 @@ class GyroControllerApp(App):
         return root
 
     def on_mode_select(self, instance, mode):
-        """Handle mode selection"""
+        """Handle mode selection and send to ESP32"""
         self.current_mode = mode
         instance.header.text = f"Mode : {mode}"
-
-        if mode == "Dual View":
-            self.cam1.opacity = 1
-            self.cam2.opacity = 1
-            self.proc_image.opacity = 0
-        else:
-            self.cam1.opacity = 0
-            self.cam2.opacity = 0
-            self.proc_image.opacity = 1
+        
+        # Send mode change to ESP32 via UDP
+        if self.server.server_ready and self.server.loop is not None:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self.server.send_mode_udp(mode),
+                    self.server.loop,
+                )
+                print(f"[APP] Mode changed to: {mode}")
+            except Exception as e:
+                print(f"[APP] Error sending mode: {e}")
 
     def on_info_select(self, instance, info):
         """Handle info display selection"""
@@ -153,8 +147,6 @@ class GyroControllerApp(App):
 
         now = time.time()
 
-        # Always send when joystick returns to center (important stop command)
-        # Otherwise rate limit to 50 Hz
         is_centered = magnitude == 0.0 and angle == 0.0
         should_send = is_centered or (
             now - self._last_control_send >= self._control_interval

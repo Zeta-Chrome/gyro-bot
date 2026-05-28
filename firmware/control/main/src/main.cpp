@@ -233,9 +233,6 @@ void motor_control_task(void *args)
         float forward = control.magnitude * cosf(control.angle * M_PI / 180.0f);
         float turn = control.magnitude * sinf(control.angle * M_PI / 180.0f);
 
-        // FIX: Velocity-based control
-        // Estimate velocity by integrating motor output (or use encoders if available)
-        // For now, we'll use a simple approximation based on pitch angle over time
         velocity += pitch_deg * dt * 0.5f;  // Approximate velocity accumulation
         velocity *= 0.95f;                  // Add damping to prevent runaway
 
@@ -260,7 +257,7 @@ void motor_control_task(void *args)
         left_speed = fmaxf(-1.0f, fminf(1.0f, left_speed));
         right_speed = fmaxf(-1.0f, fminf(1.0f, right_speed));
 
-        // ctx->motor_driver.set_motor_speeds(left_speed, right_speed);
+        // ctx->motor_driver.set_motor_speeds(0.7*left_speed, 0.7*right_speed);
 #else
         // Testing mode unchanged
         if (xQueueReceive(ctx->motor_queue, &control, pdMS_TO_TICKS(100)) == pdTRUE)
@@ -273,8 +270,9 @@ void motor_control_task(void *args)
 
             left_speed = fmaxf(-1.0f, fminf(1.0f, left_speed));
             right_speed = fmaxf(-1.0f, fminf(1.0f, right_speed));
-
-            ctx->motor_driver.set_motor_speeds(left_speed, right_speed);
+      
+            
+            ctx->motor_driver.set_motor_speeds(0.3*left_speed, 0.3*right_speed);
         }
 #endif
         taskYIELD();
@@ -414,10 +412,6 @@ void udp_tx_task(void *args)
 
     ESP_LOGI(TAG, "Starting...");
     
-    // ADD THIS: Verify struct sizes
-    ESP_LOGI(TAG, "sizeof(TimestampedIMUData)=%d (expected 28)", sizeof(TimestampedIMUData));
-    ESP_LOGI(TAG, "sizeof(TimestampedUltrasound)=%d (expected 8)", sizeof(TimestampedUltrasound));
-
     UDPClient udp_tx(UDPMode::TRANSMITTER, ctx->dest_ip, UDP_TX_PORT);
 
     int err = udp_tx.start();
@@ -471,17 +465,6 @@ void udp_tx_task(void *args)
             buffer[offset++] = (uint8_t)us_count;
             memcpy(buffer + offset, us_batch, us_count * sizeof(TimestampedUltrasound));
             offset += us_count * sizeof(TimestampedUltrasound);
-
-            // ADD THIS: Debug first packet
-            static bool first_packet = true;
-            if (first_packet && imu_count > 0) {
-                ESP_LOGI(TAG, "First packet: imu_count=%d, us_count=%d, total_bytes=%d", 
-                         imu_count, us_count, offset);
-                ESP_LOGI(TAG, "First IMU: ts=%u, ax=%.6f, ay=%.6f, az=%.6f",
-                         imu_batch[0].timestamp_ms, imu_batch[0].ax, 
-                         imu_batch[0].ay, imu_batch[0].az);
-                first_packet = false;
-            }
 
             int sent = udp_tx.send_data(buffer, offset);
             if (sent <= 0)

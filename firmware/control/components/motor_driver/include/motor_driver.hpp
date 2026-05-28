@@ -6,11 +6,10 @@
 constexpr ledc_timer_t MOTOR_LEDC_TIMER = LEDC_TIMER_0;
 constexpr ledc_mode_t MOTOR_LEDC_MODE  = LEDC_LOW_SPEED_MODE;
 constexpr ledc_timer_bit_t MOTOR_PWM_DUTY_RES = LEDC_TIMER_8_BIT; // range = 0 - 2^8-1
-constexpr size_t MOTOR_PWM_MIN_DUTY = 76;
+constexpr size_t MOTOR_PWM_MIN_DUTY = 0;
 constexpr size_t MOTOR_PWM_MAX_DUTY = 255;
-constexpr size_t MOTOR_PWM_FREQUENCY = 50000; // 5kHz
-constexpr size_t MOTOR_MAX_RPM = 100*10/12;
-constexpr float MOTOR_FACTOR = 0.965; // to reduce the left motor speed as its faster
+constexpr size_t MOTOR_PWM_FREQUENCY = 80000; // 100kHz
+constexpr float MOTOR_FACTOR = 1; // to reduce the left motor speed as its faster
 
 class MotorDriver
 {
